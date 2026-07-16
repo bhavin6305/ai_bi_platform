@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# Secrets — NEVER push these
+.env
+.env.*
+*.env
+
+# Data files — too large / user-private
+data/raw/
+data/processed/
+data/uploads/
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+*.ipynb
+
+# ML model files (if large — re-download from Colab if needed)
+ml/models/*.pkl
+
+# Power BI
+*.pbix
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/settings.json
+*.suo
+*.user
