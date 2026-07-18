@@ -118,3 +118,25 @@ def list_sessions():
             for r in rows
         ]
     }
+from analytics.chart_generator import generate_chart_data
+
+@router.get("/analytics/{session_id}/chart/{chart_id}")
+def get_chart_data(session_id: str, chart_id: int):
+    """
+    Return Plotly-ready data for a specific chart.
+
+    Member 2 calls this from Streamlit for each chart_id returned
+    by GET /api/analytics/{session_id}.
+
+    Example Streamlit usage:
+        import plotly.express as px
+        data = requests.get(f"/api/analytics/{sid}/chart/{cid}").json()
+        if data['chart_type'] == 'line':
+            fig = px.line(x=data['x'], y=data['y'], title=data['title'])
+            st.plotly_chart(fig)
+    """
+    engine = get_engine()
+    result = generate_chart_data(chart_id, session_id, engine)
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
