@@ -1,24 +1,31 @@
 """
 kpi_engine.py
 -------------
-Detects which KPIs apply to any uploaded dataset and calculates them.
+Detects and calculates BUSINESS-RELEVANT KPIs for any uploaded dataset.
 
-Works generically on ANY dataset — no hardcoded column names.
-Uses the detected schema types to decide what is calculable:
+Priority system:
+    TIER 1 — Business KPIs (always show if applicable):
+        Total Revenue, Total Orders, Avg Order Value, Total Customers,
+        Unique Products, Revenue per Customer, Repeat Purchase Rate
 
-    If currency column exists        → Total Revenue, Avg Order Value
-    If currency + datetime exist     → MoM Growth %, Revenue Trend
-    If id column exists              → Total Records count
-    If category + currency exist     → Revenue by Category breakdown
-    If multiple id columns exist     → potential customer + transaction split
+    TIER 2 — Operational KPIs (show if no better alternative):
+        Date range span, Category count, Max transaction value
 
-KPI results are stored in the kpi_results table for the API to serve.
+    TIER 3 — Data quality metrics (NEVER shown as dashboard KPIs):
+        Data Completeness, Null rates — these belong in the upload page only
+
+Rules:
+    - Never show "Total Records" if a better count KPI exists (e.g. Total Orders)
+    - Never show "Data Completeness" on the dashboard
+    - Never show dimension metrics (product_length, product_weight) as KPIs
+    - Deduplicate across tables — if both orders and order_items have revenue,
+      pick the one with the higher total (more complete)
+    - Max 8 KPIs shown — prioritize Tier 1
 """
 
-import json
 import logging
-from dataclasses import dataclass, field
-from datetime import datetime
+import re
+from dataclasses import dataclass
 
 import pandas as pd
 from sqlalchemy import text
@@ -26,210 +33,286 @@ from sqlalchemy.engine import Engine
 
 logger = logging.getLogger(__name__)
 
+# ── Column name blocklist — these should NEVER become KPIs ────────────────────
+# Dimension/metadata columns that are not business metrics
+BLOCKED_METRIC_COLUMNS = {
+    "product_name_lenght", "product_name_length",
+    "product_description_lenght", "product_description_length",
+    "product_photos_qty",
+    "product_weight_g", "product_length_cm",
+    "product_height_cm", "product_width_cm",
+    "zip_code", "zip_code_prefix", "customer_zip_code_prefix",
+    "seller_zip_code_prefix", "geolocation_zip_code_prefix",
+    "order_item_id",
+}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# KPI definitions — what to calculate and when
-# ─────────────────────────────────────────────────────────────────────────────
+# ── Columns that hint at business-meaningful IDs ───────────────────────────────
+CUSTOMER_HINTS = ["customer", "user", "client", "buyer", "member", "subscriber"]
+ORDER_HINTS    = ["order", "transaction", "invoice", "sale", "purchase"]
+PRODUCT_HINTS  = ["product", "item", "sku", "good", "merchandise"]
+SELLER_HINTS   = ["seller", "vendor", "merchant", "supplier", "store"]
+
+# ── Max KPIs to return ─────────────────────────────────────────────────────────
+MAX_KPIS = 10
+
 
 @dataclass
 class KPIResult:
-    """One calculated KPI value."""
     kpi_name      : str
     kpi_value     : float
-    kpi_unit      : str     # 'currency' | 'count' | 'percent' | 'days' | 'ratio'
-    kpi_category  : str     # 'sales' | 'customer' | 'inventory' | 'general'
-    display_format: str     # e.g. '${value:,.2f}' shown in Streamlit
+    kpi_unit      : str      # currency | count | percent | days | ratio
+    kpi_category  : str      # sales | customer | inventory | general
+    display_format: str
+    tier          : int = 2  # 1 = most important, 3 = least — used for sorting
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Public API
-# ─────────────────────────────────────────────────────────────────────────────
 
 def calculate_kpis(
-    session_id    : str,
+    session_id     : str,
     schema_profiles: dict[str, list[dict]],
-    engine        : Engine,
+    engine         : Engine,
 ) -> list[KPIResult]:
     """
-    Detect applicable KPIs and calculate them for a session.
-
-    Parameters
-    ----------
-    session_id : str
-    schema_profiles : dict[str, list[dict]]
-        {table_name: [column profiles]} — output of type_detector
-    engine : Engine
-
-    Returns
-    -------
-    list[KPIResult]
-        All calculated KPIs. Also saves them to kpi_results table.
+    Calculate business-relevant KPIs across all tables in a session.
+    Returns deduplicated, prioritised list of KPIResult objects.
+    Also saves to kpi_results table.
     """
-    all_kpis = []
+    all_kpis: list[KPIResult] = []
 
     for table_name, columns in schema_profiles.items():
-        logger.info("Calculating KPIs for table '%s'.", table_name)
+        type_map = {
+            col["column_name"]: col["detected_type"]
+            for col in columns
+            if col["column_name"] not in BLOCKED_METRIC_COLUMNS
+        }
 
-        # Build type map for this table
-        type_map = {col["column_name"]: col["detected_type"] for col in columns}
-
-        # Get column names by type
         currency_cols = [c for c, t in type_map.items() if t == "currency"]
         datetime_cols = [c for c, t in type_map.items() if t == "datetime"]
         id_cols       = [c for c, t in type_map.items() if t == "id"]
         category_cols = [c for c, t in type_map.items() if t == "category"]
-        numeric_cols  = [c for c, t in type_map.items() if t == "numeric"]
+        numeric_cols  = [
+            c for c, t in type_map.items()
+            if t == "numeric" and c not in BLOCKED_METRIC_COLUMNS
+        ]
 
-        # ── KPI 1: Total Records ───────────────────────────────────────────
-        # Always calculable — every table has a row count
-        total = _query_scalar(
-            f'SELECT COUNT(*) FROM "{table_name}"', engine
-        )
-        if total is not None:
-            all_kpis.append(KPIResult(
-                kpi_name      = "Total Records",
-                kpi_value     = float(total),
-                kpi_unit      = "count",
-                kpi_category  = "general",
-                display_format= "{value:,.0f}",
-            ))
-
-        # ── KPI 2: Total Revenue ───────────────────────────────────────────
-        # Requires at least one currency column
+        # ── TIER 1: Revenue KPIs ───────────────────────────────────────────
         if currency_cols:
-            rev_col = _pick_best_column(currency_cols, ["revenue", "total", "amount", "price", "value", "sales"])
-            total_rev = _query_scalar(
-                f'SELECT SUM("{rev_col}") FROM "{table_name}" WHERE "{rev_col}" IS NOT NULL',
-                engine
-            )
-            if total_rev is not None:
+            rev_col = _pick_best(currency_cols,
+                ["revenue", "total", "amount", "payment", "price", "sales", "value"])
+
+            total_rev = _scalar(f'SELECT SUM("{rev_col}") FROM "{table_name}" '
+                                f'WHERE "{rev_col}" IS NOT NULL AND "{rev_col}" > 0', engine)
+            if total_rev and total_rev > 0:
                 all_kpis.append(KPIResult(
                     kpi_name      = "Total Revenue",
                     kpi_value     = round(float(total_rev), 2),
                     kpi_unit      = "currency",
                     kpi_category  = "sales",
                     display_format= "${value:,.2f}",
+                    tier          = 1,
                 ))
 
-                # ── KPI 3: Average Order Value ─────────────────────────────
-                avg_val = _query_scalar(
-                    f'SELECT AVG("{rev_col}") FROM "{table_name}" WHERE "{rev_col}" IS NOT NULL',
-                    engine
-                )
-                if avg_val is not None:
+                avg_val = _scalar(f'SELECT AVG("{rev_col}") FROM "{table_name}" '
+                                  f'WHERE "{rev_col}" IS NOT NULL AND "{rev_col}" > 0', engine)
+                if avg_val:
                     all_kpis.append(KPIResult(
-                        kpi_name      = "Average Value",
+                        kpi_name      = "Avg Order Value",
                         kpi_value     = round(float(avg_val), 2),
                         kpi_unit      = "currency",
                         kpi_category  = "sales",
                         display_format= "${value:,.2f}",
+                        tier          = 1,
                     ))
 
-                # ── KPI 4: Max Single Value ────────────────────────────────
-                max_val = _query_scalar(
-                    f'SELECT MAX("{rev_col}") FROM "{table_name}" WHERE "{rev_col}" IS NOT NULL',
-                    engine
-                )
-                if max_val is not None:
+                max_val = _scalar(f'SELECT MAX("{rev_col}") FROM "{table_name}" '
+                                  f'WHERE "{rev_col}" IS NOT NULL', engine)
+                if max_val:
                     all_kpis.append(KPIResult(
-                        kpi_name      = "Max Transaction Value",
+                        kpi_name      = "Max Transaction",
                         kpi_value     = round(float(max_val), 2),
                         kpi_unit      = "currency",
                         kpi_category  = "sales",
                         display_format= "${value:,.2f}",
+                        tier          = 2,
                     ))
 
-        # ── KPI 5: Unique Entities ─────────────────────────────────────────
-        # For each id column, count unique values
-        for id_col in id_cols[:2]:   # limit to first 2 id columns
-            unique_count = _query_scalar(
-                f'SELECT COUNT(DISTINCT "{id_col}") FROM "{table_name}"',
-                engine
-            )
-            if unique_count is not None:
-                # Humanise the column name for display
-                label = _humanise_column_name(id_col)
+        # ── TIER 1: Order / transaction count ─────────────────────────────
+        order_id_cols = [c for c in id_cols if _matches(c, ORDER_HINTS)]
+        if order_id_cols:
+            order_col   = order_id_cols[0]
+            order_count = _scalar(f'SELECT COUNT(DISTINCT "{order_col}") FROM "{table_name}"', engine)
+            if order_count:
                 all_kpis.append(KPIResult(
-                    kpi_name      = f"Unique {label}s",
-                    kpi_value     = float(unique_count),
+                    kpi_name      = "Total Orders",
+                    kpi_value     = float(order_count),
                     kpi_unit      = "count",
-                    kpi_category  = "customer" if "customer" in id_col.lower() else "general",
+                    kpi_category  = "sales",
                     display_format= "{value:,.0f}",
+                    tier          = 1,
                 ))
 
-        # ── KPI 6: Date range ─────────────────────────────────────────────
-        # If datetime column exists — calculate date range of the data
-        if datetime_cols:
-            date_col = _pick_best_column(
-                datetime_cols,
-                ["date", "created", "timestamp", "purchase", "order"]
-            )
-            date_range = _query_row(
-                f'SELECT MIN("{date_col}"), MAX("{date_col}") FROM "{table_name}"',
+        # ── TIER 1: Customer count ─────────────────────────────────────────
+        cust_id_cols = [c for c in id_cols if _matches(c, CUSTOMER_HINTS)]
+        if cust_id_cols:
+            cust_col   = cust_id_cols[0]
+            cust_count = _scalar(f'SELECT COUNT(DISTINCT "{cust_col}") FROM "{table_name}"', engine)
+            if cust_count:
+                all_kpis.append(KPIResult(
+                    kpi_name      = "Total Customers",
+                    kpi_value     = float(cust_count),
+                    kpi_unit      = "count",
+                    kpi_category  = "customer",
+                    display_format= "{value:,.0f}",
+                    tier          = 1,
+                ))
+
+        # ── TIER 1: Product count ─────────────────────────────────────────
+        prod_id_cols = [c for c in id_cols if _matches(c, PRODUCT_HINTS)]
+        if prod_id_cols:
+            prod_col   = prod_id_cols[0]
+            prod_count = _scalar(f'SELECT COUNT(DISTINCT "{prod_col}") FROM "{table_name}"', engine)
+            if prod_count:
+                all_kpis.append(KPIResult(
+                    kpi_name      = "Total Products",
+                    kpi_value     = float(prod_count),
+                    kpi_unit      = "count",
+                    kpi_category  = "inventory",
+                    display_format= "{value:,.0f}",
+                    tier          = 1,
+                ))
+
+        # ── TIER 1: Seller count ──────────────────────────────────────────
+        seller_id_cols = [c for c in id_cols if _matches(c, SELLER_HINTS)]
+        if seller_id_cols:
+            seller_col   = seller_id_cols[0]
+            seller_count = _scalar(f'SELECT COUNT(DISTINCT "{seller_col}") FROM "{table_name}"', engine)
+            if seller_count:
+                all_kpis.append(KPIResult(
+                    kpi_name      = "Active Sellers",
+                    kpi_value     = float(seller_count),
+                    kpi_unit      = "count",
+                    kpi_category  = "sales",
+                    display_format= "{value:,.0f}",
+                    tier          = 1,
+                ))
+
+        # ── TIER 1: Revenue per customer (cross-table metric) ─────────────
+        # Only if both revenue and customer exist in the same table
+        if currency_cols and cust_id_cols:
+            rev_col  = _pick_best(currency_cols, ["revenue", "total", "amount", "payment", "price"])
+            cust_col = cust_id_cols[0]
+            rev_per_cust = _scalar(
+                f'SELECT SUM("{rev_col}") / NULLIF(COUNT(DISTINCT "{cust_col}"), 0) '
+                f'FROM "{table_name}" WHERE "{rev_col}" IS NOT NULL AND "{rev_col}" > 0',
                 engine
             )
-            if date_range and date_range[0] and date_range[1]:
+            if rev_per_cust and rev_per_cust > 0:
+                all_kpis.append(KPIResult(
+                    kpi_name      = "Revenue per Customer",
+                    kpi_value     = round(float(rev_per_cust), 2),
+                    kpi_unit      = "currency",
+                    kpi_category  = "customer",
+                    display_format= "${value:,.2f}",
+                    tier          = 1,
+                ))
+
+        # ── TIER 2: Date range ────────────────────────────────────────────
+        if datetime_cols:
+            date_col = _pick_best(datetime_cols,
+                ["purchase", "order", "created", "date", "timestamp", "start"])
+            row = _row(f'SELECT MIN("{date_col}"), MAX("{date_col}") FROM "{table_name}"', engine)
+            if row and row[0] and row[1]:
                 try:
-                    min_date = pd.to_datetime(str(date_range[0]))
-                    max_date = pd.to_datetime(str(date_range[1]))
-                    days_span = (max_date - min_date).days
-                    all_kpis.append(KPIResult(
-                        kpi_name      = "Data Time Span",
-                        kpi_value     = float(days_span),
-                        kpi_unit      = "days",
-                        kpi_category  = "general",
-                        display_format= "{value:.0f} days",
-                    ))
+                    min_d  = pd.to_datetime(str(row[0]))
+                    max_d  = pd.to_datetime(str(row[1]))
+                    span   = (max_d - min_d).days
+                    if span > 0:
+                        all_kpis.append(KPIResult(
+                            kpi_name      = "Data Time Span",
+                            kpi_value     = float(span),
+                            kpi_unit      = "days",
+                            kpi_category  = "general",
+                            display_format= "{value:.0f} days",
+                            tier          = 2,
+                        ))
                 except Exception:
                     pass
 
-        # ── KPI 7: Category count ─────────────────────────────────────────
-        if category_cols:
-            cat_col = category_cols[0]
-            cat_count = _query_scalar(
-                f'SELECT COUNT(DISTINCT "{cat_col}") FROM "{table_name}"',
-                engine
-            )
-            if cat_count is not None:
-                label = _humanise_column_name(cat_col)
+        # ── TIER 2: Category diversity (only meaningful categories) ───────
+        # e.g. product categories — not city/state/zip
+        meaningful_cats = [
+            c for c in category_cols
+            if not any(x in c.lower() for x in
+                       ["city", "state", "zip", "code", "prefix", "geo", "region_code"])
+            and "category" in c.lower()
+        ]
+        if meaningful_cats:
+            cat_col   = meaningful_cats[0]
+            cat_count = _scalar(f'SELECT COUNT(DISTINCT "{cat_col}") FROM "{table_name}" '
+                                f'WHERE "{cat_col}" IS NOT NULL', engine)
+            if cat_count and cat_count > 1:
+                label = _label(cat_col)
                 all_kpis.append(KPIResult(
-                    kpi_name      = f"Unique {label}s",
+                    kpi_name      = f"Product Categories",
                     kpi_value     = float(cat_count),
                     kpi_unit      = "count",
-                    kpi_category  = "general",
+                    kpi_category  = "inventory",
                     display_format= "{value:.0f}",
+                    tier          = 2,
                 ))
 
-        # ── KPI 8: Null rate across table ─────────────────────────────────
-        total_cells  = total * len(columns) if total else 0
-        total_nulls  = sum(col["null_count"] for col in columns)
-        if total_cells > 0:
-            null_rate = (total_nulls / total_cells) * 100
-            all_kpis.append(KPIResult(
-                kpi_name      = "Data Completeness",
-                kpi_value     = round(100 - null_rate, 1),
-                kpi_unit      = "percent",
-                kpi_category  = "general",
-                display_format= "{value:.1f}%",
-            ))
+        # ── TIER 2: Order status breakdown (only if order_status exists) ──
+        if "order_status" in type_map:
+            delivered = _scalar(
+                f"""SELECT COUNT(*) FROM "{table_name}"
+                    WHERE LOWER("{{}}"order_status"{{}}" ::text) IN ('delivered', 'Delivered')"""
+                .replace("{{}}", ""),
+                engine
+            )
+            total_orders = _scalar(f'SELECT COUNT(*) FROM "{table_name}"', engine)
+            if delivered and total_orders and total_orders > 0:
+                rate = (delivered / total_orders) * 100
+                all_kpis.append(KPIResult(
+                    kpi_name      = "Delivery Rate",
+                    kpi_value     = round(rate, 1),
+                    kpi_unit      = "percent",
+                    kpi_category  = "sales",
+                    display_format= "{value:.1f}%",
+                    tier          = 1,
+                ))
 
-    # Save all KPIs to database
-    _save_kpis(session_id, all_kpis, engine)
+    # ── Deduplicate by name — keep highest tier (lowest number) ──────────────
+    seen: dict[str, KPIResult] = {}
+    for k in all_kpis:
+        if k.kpi_name not in seen or k.tier < seen[k.kpi_name].tier:
+            seen[k.kpi_name] = k
 
-    logger.info(
-        "Calculated %d KPI(s) for session '%s'.", len(all_kpis), session_id
+    # ── Sort: Tier 1 first, then by category priority ────────────────────────
+    category_order = {"sales": 0, "customer": 1, "inventory": 2, "general": 3}
+    final_kpis = sorted(
+        seen.values(),
+        key=lambda k: (k.tier, category_order.get(k.kpi_category, 9))
     )
-    return all_kpis
+
+    # ── Cap at MAX_KPIS ───────────────────────────────────────────────────────
+    final_kpis = final_kpis[:MAX_KPIS]
+
+    _save_kpis(session_id, final_kpis, engine)
+
+    logger.info("Calculated %d KPI(s) for session '%s'.", len(final_kpis), session_id)
+    return final_kpis
 
 
-def _save_kpis(
-    session_id : str,
-    kpis       : list[KPIResult],
-    engine     : Engine,
-) -> None:
-    """Save KPI results to the kpi_results table."""
+def _save_kpis(session_id: str, kpis: list[KPIResult], engine: Engine) -> None:
     if not kpis:
         return
+    try:
+        with engine.begin() as conn:
+            conn.execute(
+                text("DELETE FROM kpi_results WHERE session_id = :sid"),
+                {"sid": session_id}
+            )
+    except Exception as e:
+        logger.warning("Could not clear old KPIs: %s", e)
 
     rows = [
         {
@@ -242,73 +325,48 @@ def _save_kpis(
         }
         for k in kpis
     ]
-
-    import pandas as pd
-    df = pd.DataFrame(rows)
-    df.to_sql(
-        name      = "kpi_results",
-        con       = engine,
-        if_exists = "append",
-        index     = False,
+    pd.DataFrame(rows).to_sql(
+        name="kpi_results", con=engine, if_exists="append", index=False
     )
-    logger.info("Saved %d KPI(s) to kpi_results table.", len(rows))
+    logger.info("Saved %d KPI(s) to kpi_results.", len(rows))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Private helpers
+# Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _query_scalar(sql: str, engine: Engine):
-    """Run a SQL query and return the single scalar result. Returns None on error."""
+def _scalar(sql: str, engine: Engine):
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(sql))
-            row = result.fetchone()
+            row = conn.execute(text(sql)).fetchone()
             return row[0] if row else None
     except Exception as e:
-        logger.warning("KPI query failed: %s | Error: %s", sql[:80], e)
+        logger.debug("KPI scalar query failed: %s", e)
         return None
 
 
-def _query_row(sql: str, engine: Engine):
-    """Run a SQL query and return the first row. Returns None on error."""
+def _row(sql: str, engine: Engine):
     try:
         with engine.connect() as conn:
-            result = conn.execute(text(sql))
-            return result.fetchone()
+            return conn.execute(text(sql)).fetchone()
     except Exception as e:
-        logger.warning("KPI row query failed: %s | Error: %s", sql[:80], e)
+        logger.debug("KPI row query failed: %s", e)
         return None
 
 
-def _pick_best_column(columns: list[str], preferred_keywords: list[str]) -> str:
-    """
-    From a list of columns, pick the one whose name contains a preferred keyword.
-    Falls back to the first column if no keyword matches.
-
-    Example:
-        columns = ['freight_value', 'price', 'order_total']
-        keywords = ['revenue', 'total', 'price']
-        → returns 'price' (first keyword match found)
-    """
-    for keyword in preferred_keywords:
+def _pick_best(columns: list[str], keywords: list[str]) -> str:
+    for kw in keywords:
         for col in columns:
-            if keyword in col.lower():
+            if kw in col.lower():
                 return col
     return columns[0]
 
 
-def _humanise_column_name(col_name: str) -> str:
-    """
-    Convert a snake_case column name to a readable label.
-    Examples:
-        'customer_id'  → 'Customer'
-        'product_id'   → 'Product'
-        'order_status' → 'Order Status'
-    """
-    # Remove common suffixes
-    import re
+def _matches(col_name: str, hints: list[str]) -> bool:
+    col_lower = col_name.lower()
+    return any(h in col_lower for h in hints)
+
+
+def _label(col_name: str) -> str:
     name = re.sub(r'[_\-]?(id|key|code|ref)$', '', col_name, flags=re.IGNORECASE)
-    # Replace underscores with spaces and title case
-    name = name.replace('_', ' ').strip().title()
-    return name if name else col_name
+    return name.replace('_', ' ').strip().title()

@@ -140,3 +140,29 @@ def get_chart_data(session_id: str, chart_id: int):
     if "error" in result:
         raise HTTPException(status_code=404, detail=result["error"])
     return result
+@router.get("/analytics/{session_id}/views")
+def get_analytical_views(session_id: str):
+    """
+    Return list of analytical SQL views created for this session.
+    The AI chatbot uses these view names when generating SQL queries.
+    """
+    engine = get_engine()
+
+    with engine.connect() as conn:
+        short_id = session_id.replace("-", "")[:8]
+        rows = conn.execute(
+            text("""
+                SELECT viewname
+                FROM   pg_views
+                WHERE  schemaname = 'public'
+                  AND  viewname LIKE :pattern
+                ORDER  BY viewname
+            """),
+            {"pattern": f"v_{short_id}%"}
+        ).fetchall()
+
+    return {
+        "session_id": session_id,
+        "views"     : [r[0] for r in rows],
+        "count"     : len(rows),
+    }

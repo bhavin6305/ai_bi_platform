@@ -236,11 +236,22 @@ def run_pipeline(
             fp.table_name: fp.columns
             for fp in session_profile.files
         }
+        
         analytics_result = run_analytics(
             session_id      = session_id,
             schema_profiles = schema_profiles,
             engine          = engine,
         )
+
+        # Also create analytical SQL views for AI chatbot to query
+        from analytics.sql_views import create_analytical_views
+        analytical_views = create_analytical_views(
+            session_id      = session_id,
+            schema_profiles = schema_profiles,
+            relationships   = extract_result.relationships,
+            engine          = engine,
+        )
+        logger.info("Created %d analytical view(s).", len(analytical_views))
         logger.info("Analytics: %s", analytics_result)
     except Exception as e:
         # Non-fatal — analytics failure should not fail the whole upload
