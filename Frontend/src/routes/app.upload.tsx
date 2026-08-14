@@ -47,7 +47,7 @@ function UploadPage() {
   const [files, setFiles] = useState<File[]>([]);
   const [result, setResult] = useState<UploadResponse | null>(null);
   const [stepIdx, setStepIdx] = useState(0);
-
+  const [pipelineStatus, setPipelineStatus] = useState("");
   const onDrop = useCallback((accepted: File[]) => {
     setFiles((prev) => [...prev, ...accepted]);
   }, []);
@@ -74,12 +74,28 @@ function UploadPage() {
   });
 
   useEffect(() => {
-    if (!mut.isPending) { setStepIdx(0); return; }
-    setStepIdx(0);
-    const id = setInterval(() => setStepIdx((i) => (i + 1) % PROGRESS_STEPS.length), 1400);
-    return () => clearInterval(id);
-  }, [mut.isPending]);
-
+    if (!mut.isPending) return;
+  
+    const interval = setInterval(async () => {
+      try {
+        const s = await AibiApi.status(result?.session_id || "");
+  
+        const statusMessages: Record<string, string> = {
+          profiling: "Detecting schema and column types...",
+          extracting: "Extracting data from files...",
+          cleaning: "Cleaning and validating data...",
+          loading: "Loading into database...",
+          joining: "Creating relationship views...",
+          analyzing: "Calculating KPIs and charts...",
+          done: "Complete!",
+        };
+  
+        setPipelineStatus(statusMessages[s.status] || s.status);
+      } catch {}
+    }, 2000);
+  
+    return () => clearInterval(interval);
+  }, [mut.isPending, result?.session_id]);
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>
@@ -151,7 +167,7 @@ function UploadPage() {
           {mut.isPending ? (
             <><Loader2 className="h-4 w-4 animate-spin" /> <AnimatePresence mode="wait">
               <motion.span key={stepIdx} initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }} transition={{ duration: 0.3 }}>
-                {PROGRESS_STEPS[stepIdx]}
+              {pipelineStatus || PROGRESS_STEPS[stepIdx]}
               </motion.span></AnimatePresence></>
           ) : (
             <> Run Auto-Detection & ETL Pipeline</>

@@ -166,3 +166,33 @@ def get_analytical_views(session_id: str):
         "views"     : [r[0] for r in rows],
         "count"     : len(rows),
     }
+@router.get("/analytics/{session_id}/insights")
+def get_insights(session_id: str):
+    """
+    Return AI-generated insights for all charts in a session.
+    Frontend shows these below each chart card.
+    """
+    engine = get_engine()
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("""
+                SELECT chart_id, insight_text, generated_at
+                FROM ai_insights
+                WHERE session_id = :sid
+                  AND insight_type = 'chart_insight'
+                ORDER BY chart_id
+            """),
+            {"sid": session_id}
+        ).fetchall()
+
+    return {
+        "session_id": session_id,
+        "insights": [
+            {
+                "chart_id"    : r[0],
+                "insight_text": r[1],
+                "generated_at": str(r[2]) if r[2] else None,
+            }
+            for r in rows
+        ]
+    }

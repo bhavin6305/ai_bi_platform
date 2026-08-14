@@ -22,7 +22,19 @@ function Dashboard() {
     enabled: !!sessionId,
     retry: 1,
   });
-
+  const insightsQuery = useQuery({
+    queryKey: ["insights", sessionId],
+    queryFn: async () => {
+      const res = await AibiApi.insights(sessionId!);
+      // Build a map: chart_id → insight_text
+      const map: Record<string, string> = {};
+      (res.insights || []).forEach((i: any) => {
+        map[String(i.chart_id)] = i.insight_text;
+      });
+      return map;
+    },
+    enabled: !!sessionId,
+  });
   if (!sessionId) return <EmptyState />;
 
   if (q.isLoading) return <LoadingSkeleton />;
@@ -30,7 +42,7 @@ function Dashboard() {
   if (q.isError) return (
     <div className="max-w-5xl mx-auto px-6 py-20">
       <div className="rounded-2xl p-8 flex items-center gap-4"
-           style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.25)" }}>
+        style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.25)" }}>
         <AlertCircle className="h-6 w-6" style={{ color: "#f87171" }} />
         <div>
           <div className="text-white font-semibold">Couldn't load analytics</div>
@@ -49,8 +61,8 @@ function Dashboard() {
           <p className="mt-2 text-sm text-white/50">Auto-generated from your dataset · session <span className="font-mono">{sessionId.slice(0, 8)}</span></p>
         </div>
         <Link to="/app/chat" className="inline-flex items-center gap-2 rounded-full px-4 py-2 text-sm font-medium text-white"
-              style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb)", boxShadow: "0 8px 24px -8px rgba(124,58,237,0.5)" }}>
-           Ask about this data
+          style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb)", boxShadow: "0 8px 24px -8px rgba(124,58,237,0.5)" }}>
+          Ask about this data
         </Link>
       </motion.div>
 
@@ -64,7 +76,15 @@ function Dashboard() {
       {/* Charts */}
       <div className="mt-8 grid grid-cols-1 lg:grid-cols-2 gap-4">
         {(data.charts ?? []).map((c, i) => (
-          <ChartCard key={c.chart_id} sessionId={sessionId} chartId={c.chart_id} title={c.chart_title} rationale={c.rationale} i={i} />
+          <ChartCard
+            key={c.chart_id}
+            sessionId={sessionId}
+            chartId={c.chart_id}
+            title={c.chart_title}
+            rationale={c.rationale}
+            i={i}
+            insightText={insightsQuery.data?.[String(c.chart_id)]}
+          />
         ))}
       </div>
     </div>
@@ -82,7 +102,7 @@ function KpiCard({ k, i }: { k: Kpi; i: number }) {
       className="relative rounded-2xl p-5 overflow-hidden"
       style={{ background: "rgba(13,13,24,0.9)", border: "1px solid rgba(255,255,255,0.07)" }}>
       <div className="pointer-events-none absolute inset-0 opacity-40"
-           style={{ background: "radial-gradient(circle at 100% 0%, rgba(124,58,237,0.15), transparent 60%)" }} />
+        style={{ background: "radial-gradient(circle at 100% 0%, rgba(124,58,237,0.15), transparent 60%)" }} />
       <div className="relative">
         <div className="text-[11px] uppercase tracking-widest text-white/40">{k.name}</div>
         <div className="mt-2 flex items-baseline gap-1.5">
@@ -98,7 +118,7 @@ function KpiCard({ k, i }: { k: Kpi; i: number }) {
   );
 }
 
-function ChartCard({ sessionId, chartId, title, rationale, i }: { sessionId: string; chartId: string; title: string; rationale: string; i: number }) {
+function ChartCard({ sessionId, chartId, title, rationale, i, insightText }: { sessionId: string; chartId: string; title: string; rationale: string; i: number; insightText?: string; }) {
   const q = useQuery({
     queryKey: ["chart", sessionId, chartId],
     queryFn: () => AibiApi.chart(sessionId, chartId),
@@ -122,6 +142,17 @@ function ChartCard({ sessionId, chartId, title, rationale, i }: { sessionId: str
           </Suspense>
         )}
       </div>
+      {/* AI Insight below chart */}
+      {insightText && (
+        <div className="mt-3 pt-3 border-t border-white/[0.06]">
+          <div className="flex items-start gap-2">
+            <Sparkles className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" style={{ color: "#a78bfa" }} />
+            <p className="text-xs leading-relaxed" style={{ color: "rgba(255,255,255,0.55)" }}>
+              {insightText}
+            </p>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 }
@@ -199,13 +230,13 @@ function EmptyState() {
   return (
     <div className="max-w-3xl mx-auto px-6 py-24 text-center">
       <div className="mx-auto h-16 w-16 rounded-2xl grid place-items-center"
-           style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb,#0891b2)", boxShadow: "0 0 48px -8px rgba(124,58,237,0.6)" }}>
+        style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb,#0891b2)", boxShadow: "0 0 48px -8px rgba(124,58,237,0.6)" }}>
         <Upload className="h-7 w-7 text-white" />
       </div>
       <h1 className="mt-6 text-2xl font-semibold text-white">No dataset loaded yet</h1>
       <p className="mt-2 text-sm text-white/50">Upload data to auto-generate KPIs, charts, and insights.</p>
       <Link to="/app/upload" className="mt-6 inline-flex items-center gap-2 rounded-full px-5 py-2.5 text-sm font-medium text-white"
-            style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb,#0891b2)" }}>
+        style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb,#0891b2)" }}>
         Upload data <ArrowRight className="h-4 w-4" />
       </Link>
     </div>

@@ -5,6 +5,8 @@ import {
   Search, Bell, Command,
 } from "lucide-react";
 import { Logo } from "@/components/aibi/atmosphere";
+import { History } from 'lucide-react';
+
 
 export const Route = createFileRoute("/app")({
   component: AppShell,
@@ -15,6 +17,8 @@ const nav: { to: string; label: string; icon: typeof Upload; live?: boolean }[] 
   { to: "/app/dashboard", label: "Dashboard", icon: BarChart3, live: true },
   { to: "/app/chat", label: "AI Chat", icon: MessageSquareText },
   { to: "/info", label: "About", icon: Info },
+  // In sidebar nav items, add:
+  { to: "/app/sessions", icon: History, label: "History" }
 ];
 
 function AppShell() {

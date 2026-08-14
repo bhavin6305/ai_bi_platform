@@ -82,3 +82,4 @@ def health():
         "api"     : "ok",
         "database": "ok" if db_ok else "error",
     }
+    

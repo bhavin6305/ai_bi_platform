@@ -107,6 +107,14 @@ export const AibiApi = {
     const { data } = await api.get<{ status: string }>(`/api/status/${sessionId}`);
     return data;
   },
+  insights: async (sessionId: string) => {
+    const { data } = await api.get(`/api/analytics/${sessionId}/insights`);
+    return data;
+  },
+  sessions: async () => {
+    const { data } = await api.get("/api/sessions");
+    return data;
+  },
 };
 
 export const getSessionId = () =>

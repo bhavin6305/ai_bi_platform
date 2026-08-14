@@ -241,6 +241,7 @@ def run_pipeline(
             session_id      = session_id,
             schema_profiles = schema_profiles,
             engine          = engine,
+            relationships   = extract_result.relationships
         )
 
         # Also create analytical SQL views for AI chatbot to query
@@ -258,6 +259,37 @@ def run_pipeline(
         logger.warning("Analytics engine failed (non-fatal): %s", e)
     # ── Build final result ─────────────────────────────────────────────────
     _upsert_upload_session(session_id=session_id, status="done", engine=engine)
+# ── Step 7: Generate AI chart insights ────────────────────────────────
+    logger.info("Pipeline Step 7/7: Generating AI Chart Insights")
+    try:
+        from ai.insight_generator import generate_insights_for_session
+
+        # Read chart configs we just saved
+        with engine.connect() as conn:
+            from sqlalchemy import text
+            chart_rows = conn.execute(
+                text("SELECT chart_id, chart_type, chart_title, source_table, "
+                     "x_column, y_column, aggregation FROM chart_configs "
+                     "WHERE session_id = :sid ORDER BY chart_order"),
+                {"sid": session_id}
+            ).fetchall()
+            charts_for_insights = [
+                {
+                    "chart_id"    : r[0], "chart_type": r[1],
+                    "chart_title" : r[2], "source_table": r[3],
+                    "x_column"    : r[4], "y_column": r[5],
+                    "aggregation" : r[6],
+                }
+                for r in chart_rows
+            ]
+
+        generate_insights_for_session(
+            session_id = session_id,
+            charts     = charts_for_insights,
+            engine     = engine,
+        )
+    except Exception as e:
+        logger.warning("AI insight generation failed (non-fatal): %s", e)
 
     return PipelineResult(
         session_id       = session_id,

@@ -48,3 +48,8 @@ __all__ = [
     "select_charts",
     "generate_chart_data",
 ]
+
+def run_analytics(session_id, schema_profiles, engine, relationships=None):
+    kpis   = calculate_kpis(session_id, schema_profiles, engine)
+    charts = select_charts(session_id, schema_profiles, engine, relationships or [])
+    ...

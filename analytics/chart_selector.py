@@ -63,8 +63,8 @@ FUNNEL_KEYWORDS = ["status", "stage", "step", "phase", "level", "state"]
 # ── Thresholds ────────────────────────────────────────────────────────────────
 PIE_MAX_CATEGORIES    = 8    # more than this → bar chart
 TREEMAP_MIN_CATEGORIES= 11   # more than this → treemap instead of bar
-MAX_CHARTS_PER_TABLE  = 5    # prevent one table dominating the dashboard
-MAX_TOTAL_CHARTS      = 20   # global cap
+MAX_CHARTS_PER_TABLE  = 8    # prevent one table dominating the dashboard
+MAX_TOTAL_CHARTS      = 25   # global cap
 
 
 @dataclass
@@ -85,6 +85,7 @@ def select_charts(
     session_id     : str,
     schema_profiles: dict[str, list[dict]],
     engine         : Engine,
+    relationships  : list[dict] = None
 ) -> list[ChartConfig]:
     """
     Select business-relevant charts for all tables in a session.
@@ -95,6 +96,9 @@ def select_charts(
     for table_name, columns in schema_profiles.items():
         table_charts = _select_for_table(table_name, columns, engine)
         all_charts.extend(table_charts)
+    if hasattr(engine, '_cross_table_relationships'):
+        cross = _select_cross_table_charts(schema_profiles, engine._cross_table_relationships, engine)
+        all_charts.extend(cross)
 
     # ── Global deduplication by title ────────────────────────────────────────
     seen_titles : set[str] = set()
@@ -460,3 +464,95 @@ def _pick(columns: list[str], keywords: list[str]) -> str:
 def _label(col_name: str) -> str:
     name = re.sub(r'[_\-]?(id|key|code|ref)$', '', col_name, flags=re.IGNORECASE)
     return name.replace('_', ' ').strip().title()
+
+def _select_cross_table_charts(
+    schema_profiles: dict[str, list[dict]],
+    relationships  : list[dict],
+    engine         : Engine,
+) -> list[ChartConfig]:
+    """
+    Generate charts that JOIN related tables.
+    e.g. orders (datetime) + order_items (currency) → revenue over time
+
+    This is why Olist generates few charts per table individually —
+    the datetime and currency are in DIFFERENT tables.
+    """
+    cross_charts = []
+
+    # Find tables with datetime cols and tables with currency cols
+    datetime_tables = {}   # {table_name: [datetime_cols]}
+    currency_tables = {}   # {table_name: [currency_cols]}
+
+    for table_name, columns in schema_profiles.items():
+        type_map = {c["column_name"]: c["detected_type"] for c in columns}
+        dt_cols  = [c for c, t in type_map.items() if t == "datetime"]
+        cur_cols = [c for c, t in type_map.items() if t == "currency"
+                    and c not in BLOCKED_COLUMNS]
+        cat_cols = _filter_good_categories(
+            [c for c, t in type_map.items() if t == "category"]
+        )
+        if dt_cols:
+            datetime_tables[table_name] = {"datetime": dt_cols, "category": cat_cols}
+        if cur_cols:
+            currency_tables[table_name] = {"currency": cur_cols, "category": cat_cols}
+
+    # Find pairs connected by a relationship
+    for rel in relationships:
+        from_t = rel.get("from_table", "")
+        to_t   = rel.get("to_table", "")
+        from_c = rel.get("from_column", "")
+        to_c   = rel.get("to_column", "")
+
+        # Case: from_table has datetime, to_table has currency
+        if from_t in datetime_tables and to_t in currency_tables:
+            dt_t  = from_t
+            cur_t = to_t
+            join_col_dt  = from_c
+            join_col_cur = to_c
+        elif to_t in datetime_tables and from_t in currency_tables:
+            dt_t  = to_t
+            cur_t = from_t
+            join_col_dt  = to_c
+            join_col_cur = from_c
+        else:
+            continue
+
+        date_col = _pick(datetime_tables[dt_t]["datetime"],
+                         ["purchase", "order", "created", "date", "timestamp"])
+        rev_col  = _pick(currency_tables[cur_t]["currency"],
+                         ["price", "value", "amount", "revenue", "total", "payment"])
+
+        # Cross-table revenue over time
+        sql = f"""
+            SELECT
+                DATE_TRUNC('month', t1."{date_col}"::timestamp) AS period,
+                SUM(t2."{rev_col}")                              AS value
+            FROM "{dt_t}" t1
+            JOIN "{cur_t}" t2 ON t1."{join_col_dt}" = t2."{join_col_cur}"
+            WHERE t1."{date_col}" IS NOT NULL AND t2."{rev_col}" IS NOT NULL
+            GROUP BY period ORDER BY period
+            LIMIT 30
+        """
+
+        # Verify the join works before adding the chart
+        try:
+            with engine.connect() as conn:
+                from sqlalchemy import text
+                result = conn.execute(text(sql))
+                rows   = result.fetchall()
+                if rows:
+                    # Store the SQL so chart_generator can use it directly
+                    cross_charts.append(ChartConfig(
+                        chart_type  = "line",
+                        chart_title = f"{_label(rev_col)} Over Time",
+                        source_table= f"{dt_t}__JOIN__{cur_t}",  # special marker
+                        x_column    = date_col,
+                        y_column    = rev_col,
+                        aggregation = "sum",
+                        rationale   = f"cross-table: {dt_t}.{date_col} + {cur_t}.{rev_col} joined on {join_col_dt}={join_col_cur}",
+                        priority    = 1,
+                    ))
+        except Exception as e:
+            logger.debug("Cross-table chart failed: %s", e)
+
+    return cross_charts

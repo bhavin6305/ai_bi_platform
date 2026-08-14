@@ -68,6 +68,8 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
       { name: "twitter:description", content: "Upload data. Get forecasts, dashboards, anomaly detection, and answers in plain English. The AI-native business intelligence platform." },
     ],
     links: [
+      { rel: "icon", type: "image/png", href: "/LOGO.png" },
+      { rel: "shortcut icon", type: "image/png", href: "/LOGO.png" },
       { rel: "stylesheet", href: appCss },
       { rel: "preconnect", href: "https://fonts.googleapis.com" },
       { rel: "preconnect", href: "https://fonts.gstatic.com", crossOrigin: "anonymous" },
