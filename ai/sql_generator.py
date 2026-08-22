@@ -17,7 +17,7 @@ from sqlalchemy.engine import Engine
 logger = logging.getLogger(__name__)
 
 client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-MODEL  = "llama-3.1-8b-instant"
+MODEL  = "openai/gpt-oss-120b"
 
 def generate_sql(
     question   : str,
