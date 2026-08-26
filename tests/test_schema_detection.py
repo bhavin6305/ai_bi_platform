@@ -1,60 +1,27 @@
-"""
-Quick test for the schema_detection module.
-Run this from the project root with:
-    python tests/test_schema_detection.py
-"""
+import pandas as pd
 
-import logging
-import json
+from schema_detection.type_detector import detect_column_type
 
-# Show all debug logs so you can see what the detector is thinking
-logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(name)s | %(message)s")
 
-from schema_detection import profile_upload
+def test_numeric_strings_are_not_detected_as_dates():
+    values = pd.Series(["5.0", "1.0", "3.0"] * 10)
 
-# ── Simulate file uploads using real Olist files ───────────────────────────
+    assert detect_column_type(values, "Quantity", len(values)) == "numeric"
 
-class FakeUpload:
-    """Mimics a FastAPI UploadFile object for local testing."""
-    def __init__(self, filepath):
-        self.filename = filepath.split("\\")[-1].split("/")[-1]
-        self.file     = open(filepath, "rb")
 
-files = [
-    FakeUpload("data/raw/olist_orders_dataset.csv"),
-    FakeUpload("data/raw/olist_customers_dataset.csv"),
-    FakeUpload("data/raw/olist_order_items_dataset.csv"),
-    FakeUpload("data/raw/olist_products_dataset.csv"),
-]
+def test_named_price_strings_are_detected_as_currency():
+    values = pd.Series(["255.96", "514.01", "173.91"] * 10)
 
-# ── Run the full schema detection pipeline ─────────────────────────────────
+    assert detect_column_type(values, "Unit_Price", len(values)) == "currency"
 
-print("\n" + "="*60)
-print("Running schema detection on 3 Olist files...")
-print("="*60 + "\n")
 
-result = profile_upload(files, session_id="test-session-001")
+def test_date_strings_remain_datetime():
+    values = pd.Series(["12/05/2023", "11/08/2024", "13/03/2025"] * 10)
 
-# ── Print results ──────────────────────────────────────────────────────────
+    assert detect_column_type(values, "Delivery_Date", len(values)) == "datetime"
 
-response = result.to_api_response()
-print(json.dumps(response, indent=2))
 
-# ── Quick assertions — these should all pass ───────────────────────────────
+def test_boolean_strings_are_detected_as_boolean():
+    values = pd.Series(["yes", "no", "true", "false"] * 5)
 
-print("\n" + "="*60)
-print("Running assertions...")
-print("="*60)
-
-for file_profile in result.files:
-    col_types = {c["column_name"]: c["detected_type"] for c in file_profile.columns}
-    print(f"\nTable: {file_profile.table_name}")
-    for col, typ in col_types.items():
-        print(f"  {col:40s} → {typ}")
-
-print(f"\nRelationships found: {len(result.relationships)}")
-for rel in result.relationships:
-    print(f"  {rel['from_table']}.{rel['from_column']} → {rel['to_table']}.{rel['to_column']} | {rel['confidence']} | {rel['match_percent']}%")
-
-print(f"\nOverall quality score: {result.overall_quality}/100")
-print("\n✓ Done. Check the output above for correctness.")
+    assert detect_column_type(values, "Is_Returning_Customer", len(values)) == "boolean"

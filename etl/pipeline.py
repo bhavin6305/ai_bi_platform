@@ -142,6 +142,11 @@ def run_pipeline(
     try:
         session_profile = profile_upload(files=files, session_id=session_id)
         session_id      = session_profile.session_id
+        from api.routes.notifications import create_notification
+        create_notification(
+            session_id, "schema_completed", "Schema detection completed",
+            f"Detected {len(session_profile.files)} uploaded file(s) and their column types.",
+        )
 
         # Update status immediately so frontend can show progress
         _upsert_upload_session(
@@ -203,6 +208,10 @@ def run_pipeline(
             session_profile = session_profile,
             engine          = engine,
         )
+        create_notification(
+            session_id, "data_loaded", "Data loading completed",
+            f"Loaded {load_summary.get('total_rows', 0):,} row(s) into PostgreSQL.",
+        )
     except Exception as e:
         logger.error("Pipeline failed at loading: %s", e)
         _upsert_upload_session(session_id=session_id, status="error", engine=engine)
@@ -243,6 +252,11 @@ def run_pipeline(
             engine          = engine,
             relationships   = extract_result.relationships
         )
+        create_notification(
+            session_id, "analytics_completed", "Analytics completed",
+            f"Generated {analytics_result.get('charts_configured', 0)} chart(s) and "
+            f"{analytics_result.get('kpis_calculated', 0)} KPI(s).",
+        )
 
         # Also create analytical SQL views for AI chatbot to query
         from analytics.sql_views import create_analytical_views
@@ -259,6 +273,10 @@ def run_pipeline(
         logger.warning("Analytics engine failed (non-fatal): %s", e)
     # ── Build final result ─────────────────────────────────────────────────
     _upsert_upload_session(session_id=session_id, status="done", engine=engine)
+    create_notification(
+        session_id, "pipeline_completed", "Pipeline completed",
+        "Your data is ready for dashboards, charts, and AI insights.",
+    )
 # ── Step 7: Generate AI chart insights ────────────────────────────────
     logger.info("Pipeline Step 7/7: Generating AI Chart Insights")
     try:

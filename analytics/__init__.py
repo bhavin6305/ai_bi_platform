@@ -16,6 +16,7 @@ def run_analytics(
     session_id     : str,
     schema_profiles: dict,
     engine,
+    relationships  : list[dict] = None,
 ) -> dict:
     """
     Run the full analytics pipeline for a session.
@@ -29,7 +30,7 @@ def run_analytics(
     logger.info("Running analytics for session '%s'.", session_id)
 
     kpis   = calculate_kpis(session_id, schema_profiles, engine)
-    charts = select_charts(session_id, schema_profiles, engine)
+    charts = select_charts(session_id, schema_profiles, engine, relationships or [])
 
     logger.info(
         "Analytics complete: %d KPIs, %d charts for session '%s'.",
@@ -48,8 +49,3 @@ __all__ = [
     "select_charts",
     "generate_chart_data",
 ]
-
-def run_analytics(session_id, schema_profiles, engine, relationships=None):
-    kpis   = calculate_kpis(session_id, schema_profiles, engine)
-    charts = select_charts(session_id, schema_profiles, engine, relationships or [])
-    ...

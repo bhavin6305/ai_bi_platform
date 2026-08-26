@@ -29,3 +29,4 @@ groq==0.9.0
 # ── Frontend (Member 2) ───────────────────────────────────────────────────────
 streamlit==1.35.0
 plotly==5.22.0            # auto-generated interactive charts in Streamlit
+reportlab==4.2.2         # in-memory executive PDF reports

@@ -158,8 +158,17 @@ def _build_join_view_sql(
                 ),
                 {"tname": to_table}
             )
-            # Exclude the join column (to_col) from t2 — it already exists in t1
-            to_cols = [row[0] for row in query_result if row[0] != to_col]
+            # Exclude every column already present in t1. PostgreSQL views cannot
+            # expose duplicate output names when the source tables share fields.
+            from_columns = conn.execute(
+                text(
+                    "SELECT column_name FROM information_schema.columns "
+                    "WHERE table_name = :tname AND table_schema = 'public'"
+                ),
+                {"tname": from_table}
+            )
+            from_col_names = {row[0] for row in from_columns}
+            to_cols = [row[0] for row in query_result if row[0] not in from_col_names]
     except Exception as e:
         logger.warning("Could not introspect columns for '%s': %s — using t2.*", to_table, e)
         to_cols = None

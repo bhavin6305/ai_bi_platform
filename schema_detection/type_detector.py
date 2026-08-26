@@ -172,6 +172,17 @@ def detect_column_type(
     # At this point we have a non-numeric, non-boolean, non-datetime column.
     # It's either: id, datetime (stored as string), category, or text.
 
+    # Numeric values imported as strings are common in CSV files. Detect them
+    # before date parsing because dateutil accepts values such as "5.0".
+    numeric_values = pd.to_numeric(non_null, errors="coerce")
+    if numeric_values.notna().mean() >= 0.95:
+        return _classify_numeric(
+            numeric_values,
+            col_lower,
+            numeric_values.dropna(),
+            total_rows,
+        )
+
     # Try datetime parsing even without a name keyword
     # (some files have date columns named 'col_A' or 'field_3')
     if _try_parse_datetime(non_null):

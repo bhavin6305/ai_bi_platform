@@ -9,6 +9,7 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from api.database import get_engine
 from ai.sql_generator  import generate_sql, execute_sql
@@ -71,7 +72,6 @@ def chat(request: ChatRequest):
     # Step 4: Save to ai_insights table
     try:
         import pandas as pd
-        from sqlalchemy import text
         pd.DataFrame([{
             "session_id"    : request.session_id,
             "insight_type"  : "chat_response",
@@ -80,8 +80,8 @@ def chat(request: ChatRequest):
             "sql_used"      : sql,
             "insight_text"  : answer,
         }]).to_sql("ai_insights", con=engine, if_exists="append", index=False)
-    except Exception:
-        pass   # non-fatal
+    except Exception as error:
+        logger.warning("Could not save chat response for session '%s': %s", request.session_id, error)
 
     return ChatResponse(
         session_id = request.session_id,
@@ -91,3 +91,43 @@ def chat(request: ChatRequest):
         row_count  = len(results),
         followup_questions = [],
     )
+
+
+@router.get("/chat/{session_id}/history")
+def chat_history(session_id: str):
+    """Return saved chat responses for one uploaded dataset session."""
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required.")
+
+    engine = get_engine()
+    with engine.connect() as conn:
+        session_exists = conn.execute(
+            text("SELECT 1 FROM upload_sessions WHERE session_id = :sid"),
+            {"sid": session_id},
+        ).scalar()
+        if not session_exists:
+            raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+        rows = conn.execute(
+            text("""
+                SELECT insight_id, question_asked, insight_text, sql_used, generated_at
+                FROM ai_insights
+                WHERE session_id = :sid AND insight_type = 'chat_response'
+                ORDER BY generated_at, insight_id
+            """),
+            {"sid": session_id},
+        ).mappings().all()
+
+    return {
+        "session_id": session_id,
+        "messages": [
+            {
+                "insight_id": row["insight_id"],
+                "question": row["question_asked"],
+                "answer": row["insight_text"],
+                "sql_used": row["sql_used"],
+                "generated_at": row["generated_at"].isoformat() if row["generated_at"] else None,
+            }
+            for row in rows
+        ],
+    }

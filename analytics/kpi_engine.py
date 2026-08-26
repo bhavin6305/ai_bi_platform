@@ -25,11 +25,14 @@ Rules:
 
 import logging
 import re
+from contextvars import ContextVar
 from dataclasses import dataclass
 
 import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
+
+from analytics.filters import DashboardFilters, filtered_query
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +57,9 @@ SELLER_HINTS   = ["seller", "vendor", "merchant", "supplier", "store"]
 
 # ── Max KPIs to return ─────────────────────────────────────────────────────────
 MAX_KPIS = 10
+_ACTIVE_FILTERS: ContextVar[DashboardFilters | None] = ContextVar(
+    "active_dashboard_filters", default=None
+)
 
 
 @dataclass
@@ -70,12 +76,27 @@ def calculate_kpis(
     session_id     : str,
     schema_profiles: dict[str, list[dict]],
     engine         : Engine,
+    filters        : DashboardFilters | None = None,
+    persist        : bool = True,
 ) -> list[KPIResult]:
     """
     Calculate business-relevant KPIs across all tables in a session.
     Returns deduplicated, prioritised list of KPIResult objects.
     Also saves to kpi_results table.
     """
+    token = _ACTIVE_FILTERS.set(filters)
+    try:
+        return _calculate_kpis(session_id, schema_profiles, engine, persist)
+    finally:
+        _ACTIVE_FILTERS.reset(token)
+
+
+def _calculate_kpis(
+    session_id     : str,
+    schema_profiles: dict[str, list[dict]],
+    engine         : Engine,
+    persist        : bool,
+) -> list[KPIResult]:
     all_kpis: list[KPIResult] = []
 
     for table_name, columns in schema_profiles.items():
@@ -296,7 +317,8 @@ def calculate_kpis(
     # ── Cap at MAX_KPIS ───────────────────────────────────────────────────────
     final_kpis = final_kpis[:MAX_KPIS]
 
-    _save_kpis(session_id, final_kpis, engine)
+    if persist:
+        _save_kpis(session_id, final_kpis, engine)
 
     logger.info("Calculated %d KPI(s) for session '%s'.", len(final_kpis), session_id)
     return final_kpis
@@ -337,8 +359,9 @@ def _save_kpis(session_id: str, kpis: list[KPIResult], engine: Engine) -> None:
 
 def _scalar(sql: str, engine: Engine):
     try:
+        sql, params = _apply_active_filters(sql, engine)
         with engine.connect() as conn:
-            row = conn.execute(text(sql)).fetchone()
+            row = conn.execute(text(sql), params).fetchone()
             return row[0] if row else None
     except Exception as e:
         logger.debug("KPI scalar query failed: %s", e)
@@ -347,11 +370,22 @@ def _scalar(sql: str, engine: Engine):
 
 def _row(sql: str, engine: Engine):
     try:
+        sql, params = _apply_active_filters(sql, engine)
         with engine.connect() as conn:
-            return conn.execute(text(sql)).fetchone()
+            return conn.execute(text(sql), params).fetchone()
     except Exception as e:
         logger.debug("KPI row query failed: %s", e)
         return None
+
+
+def _apply_active_filters(sql: str, engine: Engine) -> tuple[str, dict[str, object]]:
+    filters = _ACTIVE_FILTERS.get()
+    if not filters or not filters.active:
+        return sql, {}
+    match = re.search(r'\bFROM\s+"([A-Za-z_][A-Za-z0-9_]*)"', sql, re.IGNORECASE)
+    if not match:
+        return sql, {}
+    return filtered_query(sql, match.group(1), filters, engine)
 
 
 def _pick_best(columns: list[str], keywords: list[str]) -> str:

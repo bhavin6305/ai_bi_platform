@@ -44,20 +44,33 @@ EXECUTIVE'S QUESTION: "{question}"
 DATA RETURNED ({row_count} rows total, showing up to 30):
 {results_str}
 
-Write your analysis following this structure:
+Write a useful, objective business explanation using this structure:
 
-1. DIRECT ANSWER (1 sentence): State the key finding immediately with specific numbers.
-2. KEY DETAILS (2-3 sentences): Explain what the numbers mean in business terms.
-   - Mention the top performer / worst performer if applicable
-   - Include percentages, comparisons, or trends if visible in the data
-   - Point out anything surprising or worth attention
-3. RECOMMENDATION (1 sentence): Suggest one specific action the business could take.
+OBJECTIVE ANSWER:
+State the direct answer in 2-3 sentences. Use exact values, dates, rankings, and percentages
+that are visible in the returned data. Do not delay the answer or repeat the question.
+
+WHAT THE DATA SAYS:
+Explain the important details in 3-5 sentences. Compare the strongest and weakest results,
+describe a trend or unusual result when one is visible, and explain why the finding matters
+to the business. Only make claims supported by the returned data.
+
+PROBLEMS OR RISKS:
+Explain 1-3 concerns suggested by the data in 2-4 sentences. If the data does not show a
+clear problem, say that directly and identify what should be watched instead. Never invent
+a cause, missing information, or business problem.
+
+RECOMMENDED ACTION:
+Give 2-3 practical actions in 2-4 sentences. Prioritise the most useful next step and make
+it measurable where possible. Keep recommendations realistic and connected to the findings.
 
 Style rules:
-- Use plain English — no SQL, no technical terms, no mention of tables or columns
-- Be specific — always include actual numbers from the data
-- Write in paragraph form, not bullet points
-- Sound like a confident analyst, not a robot
+- Use simple, natural English that a non-technical business user can understand
+- Use short paragraphs with the section labels above; do not use markdown tables
+- Always include actual numbers from the data and clearly distinguish facts from suggestions
+- Be balanced and objective; do not exaggerate or claim certainty the data cannot support
+- Never mention SQL, databases, tables, columns, queries, or technical implementation details
+- Do not say "This chart shows" or "Based on the data" as an empty opening
 
 Your analysis:"""
 
@@ -68,15 +81,16 @@ Your analysis:"""
                 {
                     "role"   : "system",
                     "content": (
-                        "You are an expert business analyst who explains data insights "
-                        "to non-technical executives. You are direct, specific, and always "
-                        "reference actual numbers from the data. You never mention SQL, "
-                        "databases, tables, or columns in your responses."
+                        "You are an expert business analyst who gives objective, detailed, "
+                        "plain-English answers to non-technical business users. Separate "
+                        "verified findings from recommendations, reference actual numbers, "
+                        "and never invent facts. Never mention SQL, databases, tables, "
+                        "columns, queries, or implementation details in the explanation."
                     )
                 },
                 {"role": "user", "content": prompt}
             ],
-            max_tokens = 400,
+            max_tokens = 650,
             temperature= 0.4,
         )
         return response.choices[0].message.content.strip()
@@ -91,11 +105,10 @@ def _fallback_summary(question: str, results: list[dict]) -> str:
         return "No data found for your query."
     row_count = len(results)
     first_row = results[0]
-    keys      = list(first_row.keys())
     return (
-        f"Found {row_count} result(s). "
-        f"Columns: {', '.join(keys[:5])}. "
-        f"First result: {json.dumps(first_row, default=str)[:200]}."
+        f"The analysis found {row_count} result(s). "
+        f"The first result was {json.dumps(first_row, default=str)[:200]}. "
+        "Review the returned results for a complete business conclusion."
     )
 def suggest_followup_questions(
     question: str,

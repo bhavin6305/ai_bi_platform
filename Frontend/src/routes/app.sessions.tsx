@@ -2,7 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AibiApi, setSessionId } from "@/lib/aibi-api";
 import { useNavigate } from "@tanstack/react-router";
-import { Clock, Database, ArrowRight } from "lucide-react";
+import { Clock, Database, ArrowRight, MessageSquareText } from "lucide-react";
 
 export const Route = createFileRoute("/app/sessions")({
   component: SessionsPage,
@@ -38,6 +38,14 @@ function SessionsPage() {
             </div>
           </div>
           <div className="text-xs text-white/30">{s.created_at?.slice(0, 10)}</div>
+          <button
+            aria-label={`Open chat for session ${s.session_id.slice(0, 8)}`}
+            title="Open chat"
+            onClick={(event) => { event.stopPropagation(); setSessionId(s.session_id); navigate({ to: "/app/chat" }); }}
+            className="rounded-lg p-2 text-white/35 hover:bg-white/10 hover:text-white"
+          >
+            <MessageSquareText className="h-4 w-4" />
+          </button>
           <ArrowRight className="h-4 w-4 text-white/30" />
         </div>
       ))}

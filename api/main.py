@@ -16,7 +16,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from api.database import test_connection
-from api.routes import upload, schema, analytics, kpis, chat
+from api.routes import upload, schema, analytics, kpis, chat, auth, notifications, reports
 
 logging.basicConfig(
     level  = logging.INFO,
@@ -50,6 +50,9 @@ app.include_router(schema.router,    prefix="/api", tags=["Schema"])
 app.include_router(analytics.router, prefix="/api", tags=["Analytics"])
 app.include_router(kpis.router,      prefix="/api", tags=["KPIs"])
 app.include_router(chat.router,      prefix="/api", tags=["AI Chat"])
+app.include_router(auth.router,     prefix="/api", tags=["Authentication"])
+app.include_router(notifications.router, prefix="/api", tags=["Notifications"])
+app.include_router(reports.router, prefix="/api", tags=["Reports"])
 
 
 # ── Startup event ─────────────────────────────────────────────────────────────

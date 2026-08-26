@@ -14,6 +14,8 @@ import pandas as pd
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from analytics.filters import DashboardFilters, filtered_query
+
 logger = logging.getLogger(__name__)
 
 MAX_CHART_POINTS = 500
@@ -23,6 +25,7 @@ def generate_chart_data(
     chart_id   : int,
     session_id : str,
     engine     : Engine,
+    filters    : DashboardFilters | None = None,
 ) -> dict:
     """
     Generate Plotly-ready chart data for a given chart_id.
@@ -47,23 +50,23 @@ def generate_chart_data(
 
     try:
         if chart_type == "line":
-            return _generate_line_data(table, x_col, y_col, group_col, agg, title, rationale, engine)
+            return _generate_line_data(table, x_col, y_col, group_col, agg, title, rationale, engine, filters)
         elif chart_type == "bar":
-            return _generate_bar_data(table, x_col, y_col, agg, title, rationale, engine)
+            return _generate_bar_data(table, x_col, y_col, agg, title, rationale, engine, filters)
         elif chart_type == "pie":
-            return _generate_pie_data(table, x_col, title, rationale, engine)
+            return _generate_pie_data(table, x_col, title, rationale, engine, filters)
         elif chart_type == "scatter":
-            return _generate_scatter_data(table, x_col, y_col, title, rationale, engine)
+            return _generate_scatter_data(table, x_col, y_col, title, rationale, engine, filters)
         elif chart_type == "histogram":
-            return _generate_histogram_data(table, x_col, title, rationale, engine)
+            return _generate_histogram_data(table, x_col, title, rationale, engine, filters)
         elif chart_type == "treemap":
-            return _generate_treemap_data(table, x_col, y_col, title, rationale, engine)
+            return _generate_treemap_data(table, x_col, y_col, title, rationale, engine, filters)
         elif chart_type == "heatmap":
-            return _generate_heatmap_data(table, x_col, title, rationale, engine)
+            return _generate_heatmap_data(table, x_col, title, rationale, engine, filters)
         elif chart_type == "box":
-            return _generate_box_data(table, x_col, title, rationale, engine)
+            return _generate_box_data(table, x_col, title, rationale, engine, filters)
         elif chart_type == "funnel":
-            return _generate_funnel_data(table, x_col, y_col, title, rationale, engine)
+            return _generate_funnel_data(table, x_col, y_col, title, rationale, engine, filters)
         else:
             return {"error": f"Unknown chart type: {chart_type}"}
     except Exception as e:
@@ -71,7 +74,7 @@ def generate_chart_data(
         return {"error": str(e)}
 
 
-def _generate_line_data(table, x_col, y_col, group_col, agg, title, rationale, engine):
+def _generate_line_data(table, x_col, y_col, group_col, agg, title, rationale, engine, filters=None):
     agg_func = "SUM" if agg == "sum" else ("AVG" if agg == "avg" else "COUNT")
     if group_col:
         sql = f"""
@@ -89,7 +92,7 @@ def _generate_line_data(table, x_col, y_col, group_col, agg, title, rationale, e
             WHERE "{x_col}" IS NOT NULL AND "{y_col}" IS NOT NULL
             GROUP BY period ORDER BY period LIMIT {MAX_CHART_POINTS}
         """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     df["period"] = df["period"].astype(str)
@@ -100,7 +103,7 @@ def _generate_line_data(table, x_col, y_col, group_col, agg, title, rationale, e
     return result
 
 
-def _generate_bar_data(table, x_col, y_col, agg, title, rationale, engine):
+def _generate_bar_data(table, x_col, y_col, agg, title, rationale, engine, filters=None):
     agg_func = "SUM" if agg == "sum" else ("AVG" if agg == "avg" else "COUNT")
     if y_col:
         sql = f"""
@@ -114,53 +117,53 @@ def _generate_bar_data(table, x_col, y_col, agg, title, rationale, engine):
             FROM "{table}" WHERE "{x_col}" IS NOT NULL
             GROUP BY "{x_col}" ORDER BY value DESC LIMIT 15
         """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     return {"chart_type": "bar", "title": title, "rationale": rationale,
             "x": df[x_col].astype(str).tolist(), "y": df["value"].tolist()}
 
 
-def _generate_pie_data(table, x_col, title, rationale, engine):
+def _generate_pie_data(table, x_col, title, rationale, engine, filters=None):
     sql = f"""
         SELECT "{x_col}", COUNT(*) AS count FROM "{table}"
         WHERE "{x_col}" IS NOT NULL
         GROUP BY "{x_col}" ORDER BY count DESC LIMIT 6
     """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     return {"chart_type": "pie", "title": title, "rationale": rationale,
             "labels": df[x_col].astype(str).tolist(), "values": df["count"].tolist()}
 
 
-def _generate_scatter_data(table, x_col, y_col, title, rationale, engine):
+def _generate_scatter_data(table, x_col, y_col, title, rationale, engine, filters=None):
     sql = f"""
         SELECT "{x_col}", "{y_col}" FROM "{table}"
         WHERE "{x_col}" IS NOT NULL AND "{y_col}" IS NOT NULL
         ORDER BY RANDOM() LIMIT {MAX_CHART_POINTS}
     """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     return {"chart_type": "scatter", "title": title, "rationale": rationale,
             "x": df[x_col].tolist(), "y": df[y_col].tolist()}
 
 
-def _generate_histogram_data(table, x_col, title, rationale, engine):
+def _generate_histogram_data(table, x_col, title, rationale, engine, filters=None):
     sql = f"""
         SELECT "{x_col}" FROM "{table}"
         WHERE "{x_col}" IS NOT NULL
         ORDER BY RANDOM() LIMIT {MAX_CHART_POINTS}
     """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     return {"chart_type": "histogram", "title": title, "rationale": rationale,
             "x": df[x_col].tolist()}
 
 
-def _generate_treemap_data(table, x_col, y_col, title, rationale, engine):
+def _generate_treemap_data(table, x_col, y_col, title, rationale, engine, filters=None):
     if y_col:
         sql = f"""
             SELECT "{x_col}", SUM("{y_col}") AS value FROM "{table}"
@@ -173,7 +176,7 @@ def _generate_treemap_data(table, x_col, y_col, title, rationale, engine):
             WHERE "{x_col}" IS NOT NULL
             GROUP BY "{x_col}" ORDER BY value DESC LIMIT 30
         """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     return {"chart_type": "treemap", "title": title, "rationale": rationale,
@@ -182,13 +185,13 @@ def _generate_treemap_data(table, x_col, y_col, title, rationale, engine):
             "parents": [""] * len(df)}
 
 
-def _generate_heatmap_data(table, x_col, title, rationale, engine):
+def _generate_heatmap_data(table, x_col, title, rationale, engine, filters=None):
     cols = [c.strip() for c in x_col.split(",") if c.strip()]
     if len(cols) < 2:
         return {"error": "Need at least 2 columns for heatmap."}
     col_select = ", ".join(f'"{c}"' for c in cols)
     sql = f'SELECT {col_select} FROM "{table}" LIMIT 5000'
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     df_num = df.apply(pd.to_numeric, errors="coerce").dropna(axis=1, how="all")
@@ -200,20 +203,20 @@ def _generate_heatmap_data(table, x_col, title, rationale, engine):
             "z": corr.values.tolist()}
 
 
-def _generate_box_data(table, x_col, title, rationale, engine):
+def _generate_box_data(table, x_col, title, rationale, engine, filters=None):
     sql = f"""
         SELECT "{x_col}" FROM "{table}"
         WHERE "{x_col}" IS NOT NULL
         ORDER BY RANDOM() LIMIT {MAX_CHART_POINTS}
     """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     return {"chart_type": "box", "title": title, "rationale": rationale,
             "y": df[x_col].tolist(), "name": x_col}
 
 
-def _generate_funnel_data(table, x_col, y_col, title, rationale, engine):
+def _generate_funnel_data(table, x_col, y_col, title, rationale, engine, filters=None):
     if y_col:
         sql = f"""
             SELECT "{x_col}", SUM("{y_col}") AS value FROM "{table}"
@@ -226,17 +229,20 @@ def _generate_funnel_data(table, x_col, y_col, title, rationale, engine):
             WHERE "{x_col}" IS NOT NULL
             GROUP BY "{x_col}" ORDER BY value DESC LIMIT 10
         """
-    df = _query_df(sql, engine)
+    df = _query_df(sql, engine, table, filters)
     if df is None or df.empty:
         return {"error": "No data available."}
     return {"chart_type": "funnel", "title": title, "rationale": rationale,
             "x": df["value"].tolist(), "y": df[x_col].astype(str).tolist()}
 
 
-def _query_df(sql: str, engine: Engine) -> pd.DataFrame | None:
+def _query_df(sql: str, engine: Engine, table: str | None = None, filters: DashboardFilters | None = None) -> pd.DataFrame | None:
     try:
+        params: dict[str, object] = {}
+        if table:
+            sql, params = filtered_query(sql, table, filters, engine)
         with engine.connect() as conn:
-            return pd.read_sql(text(sql), conn)
+            return pd.read_sql(text(sql), conn, params=params)
     except Exception as e:
         logger.error("Chart data query failed: %s", e)
         return None

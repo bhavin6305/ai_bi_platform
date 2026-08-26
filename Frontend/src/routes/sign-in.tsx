@@ -3,6 +3,7 @@ import { motion } from "framer-motion";
 import { useState } from "react";
 import { Mail, Lock, ArrowRight, Github, Chrome, Sparkles, Eye, EyeOff } from "lucide-react";
 import { Logo } from "@/components/aibi/atmosphere";
+import { AibiApi, setAuthToken } from "@/lib/aibi-api";
 
 export const Route = createFileRoute("/sign-in")({
   head: () => ({
@@ -24,14 +25,32 @@ export function AuthScreen({ mode }: { mode: "sign-in" | "sign-up" }) {
   const isSignUp = mode === "sign-up";
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    const formData = new FormData(e.currentTarget as HTMLFormElement);
     setLoading(true);
-    await new Promise((r) => setTimeout(r, 900));
-    setLoading(false);
-    navigate({ to: "/app/upload" });
+    setError(null);
+    try {
+      const response = isSignUp
+        ? await AibiApi.signup(
+            String(formData.get("full_name") || ""),
+            String(formData.get("email") || ""),
+            String(formData.get("password") || ""),
+          )
+        : await AibiApi.signin(
+            String(formData.get("email") || ""),
+            String(formData.get("password") || ""),
+          );
+      setAuthToken(response.access_token);
+      navigate({ to: "/app/upload" });
+    } catch (requestError: any) {
+      setError(requestError?.response?.data?.detail || "Authentication failed. Please try again.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -170,14 +189,14 @@ export function AuthScreen({ mode }: { mode: "sign-in" | "sign-up" }) {
               <form onSubmit={handleSubmit} className="flex flex-col gap-3.5">
                 {isSignUp && (
                   <Field label="Full name" icon={<span className="text-xs text-white/40">Aa</span>}>
-                    <input required type="text" placeholder="Jane Doe" className="auth-input" />
+                    <input required name="full_name" type="text" placeholder="Jane Doe" className="auth-input" />
                   </Field>
                 )}
                 <Field label="Email" icon={<Mail className="h-4 w-4 text-white/40" />}>
-                  <input required type="email" placeholder="you@company.com" className="auth-input" />
+                  <input required name="email" type="email" placeholder="you@company.com" className="auth-input" />
                 </Field>
                 <Field label="Password" icon={<Lock className="h-4 w-4 text-white/40" />}>
-                  <input required type={showPw ? "text" : "password"} placeholder="••••••••" className="auth-input pr-10" />
+                  <input required name="password" type={showPw ? "text" : "password"} placeholder="••••••••" className="auth-input pr-10" />
                   <button type="button" onClick={() => setShowPw((v) => !v)}
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-white/40 hover:text-white/80">
                     {showPw ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
@@ -214,6 +233,8 @@ export function AuthScreen({ mode }: { mode: "sign-in" | "sign-up" }) {
                   <span className="relative">{loading ? "Loading…" : isSignUp ? "Create account" : "Sign in"}</span>
                   {!loading && <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" />}
                 </motion.button>
+
+                {error && <p role="alert" className="text-xs text-red-300 text-center">{error}</p>}
 
                 <p className="text-[11px] text-white/40 text-center mt-2">
                   By continuing you agree to our <a href="#" className="underline">Terms</a> and <a href="#" className="underline">Privacy Policy</a>.

@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 import { Send, Sparkles, User, Copy, Upload, ArrowRight, Loader2 } from "lucide-react";
@@ -26,6 +26,20 @@ function ChatPage() {
   const [messages, setMessages] = useState<Msg[]>([]);
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const historyQuery = useQuery({
+    queryKey: ["chat-history", sessionId],
+    queryFn: () => AibiApi.chatHistory(sessionId!),
+    enabled: !!sessionId,
+  });
+
+  useEffect(() => {
+    if (!historyQuery.data) return;
+    setMessages(historyQuery.data.messages.flatMap((message) => [
+      { id: `history-user-${message.insight_id}`, role: "user" as const, text: message.question },
+      { id: `history-ai-${message.insight_id}`, role: "ai" as const, text: message.answer, sql: message.sql_used ?? undefined },
+    ]));
+  }, [historyQuery.data]);
 
   const mut = useMutation({
     mutationFn: (q: string) => AibiApi.chat(sessionId!, q),
@@ -78,7 +92,9 @@ function ChatPage() {
     <div className="h-[calc(100vh-4rem)] flex flex-col">
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="max-w-3xl mx-auto px-6 py-10">
-          {messages.length === 0 ? (
+          {historyQuery.isLoading ? (
+            <div className="py-20 text-center text-sm text-white/40">Loading conversation...</div>
+          ) : messages.length === 0 ? (
             <div className="text-center py-12">
               <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}
                 className="mx-auto h-16 w-16 rounded-2xl grid place-items-center"

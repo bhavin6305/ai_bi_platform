@@ -96,8 +96,8 @@ def select_charts(
     for table_name, columns in schema_profiles.items():
         table_charts = _select_for_table(table_name, columns, engine)
         all_charts.extend(table_charts)
-    if hasattr(engine, '_cross_table_relationships'):
-        cross = _select_cross_table_charts(schema_profiles, engine._cross_table_relationships, engine)
+    if relationships:
+        cross = _select_cross_table_charts(schema_profiles, relationships, engine)
         all_charts.extend(cross)
 
     # ── Global deduplication by title ────────────────────────────────────────
@@ -545,7 +545,7 @@ def _select_cross_table_charts(
                     cross_charts.append(ChartConfig(
                         chart_type  = "line",
                         chart_title = f"{_label(rev_col)} Over Time",
-                        source_table= f"{dt_t}__JOIN__{cur_t}",  # special marker
+                        source_table= rel["view_name"],
                         x_column    = date_col,
                         y_column    = rev_col,
                         aggregation = "sum",
