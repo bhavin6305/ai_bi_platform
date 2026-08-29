@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Download, Loader2, Sparkles, TrendingUp, TrendingDown, ArrowRight, Upload } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Download, Loader2, Sparkles, ArrowRight, Upload } from "lucide-react";
 import { AibiApi, getSessionId, type ChartData, type DashboardFilters, type FilterField, type Kpi } from "@/lib/aibi-api";
 
 const Plot = lazy(() => import("react-plotly.js"));
@@ -59,7 +59,6 @@ function Dashboard() {
     queryKey: ["insights", sessionId],
     queryFn: async () => {
       const res = await AibiApi.insights(sessionId!);
-      // Build a map: chart_id → insight_text
       const map: Record<string, string> = {};
       res.insights.forEach((insight) => {
         if (insight.insight_text?.trim()) {
@@ -127,14 +126,12 @@ function Dashboard() {
         />
       ) : null}
 
-      {/* KPIs */}
       {data.kpis?.length > 0 && (
         <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {data.kpis.slice(0, 8).map((k, i) => <KpiCard key={k.name + i} k={k} i={i} />)}
         </div>
       )}
 
-      {/* Charts */}
       <div className={`mt-8 grid grid-cols-1 lg:grid-cols-2 ${compactMode ? "gap-2" : "gap-4"}`}>
         {(data.charts ?? []).map((c, i) => (
           <ChartCard
@@ -154,9 +151,6 @@ function Dashboard() {
 }
 
 function KpiCard({ k, i }: { k: Kpi; i: number }) {
-  // fake trend from hash for visual polish
-  const trend = (k.name.length % 2 === 0 ? 1 : -1) * ((k.name.charCodeAt(0) % 15) + 3);
-  const up = trend >= 0;
   const val = typeof k.value === "number" ? formatNumber(k.value) : String(k.value);
   return (
     <motion.div
@@ -171,10 +165,7 @@ function KpiCard({ k, i }: { k: Kpi; i: number }) {
           <span className="text-3xl font-semibold text-white tracking-tight">{val}</span>
           {k.unit && <span className="text-sm text-white/40">{k.unit}</span>}
         </div>
-        <div className="mt-3 flex items-center gap-1.5 text-xs" style={{ color: up ? "#34d399" : "#f87171" }}>
-          {up ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-          {up ? "+" : ""}{trend}% vs last period
-        </div>
+        <div className="mt-3 text-xs text-white/35">No period comparison available</div>
       </div>
     </motion.div>
   );
@@ -204,7 +195,6 @@ function ChartCard({ sessionId, chartId, title, rationale, filters, i, insightTe
           </Suspense>
         )}
       </div>
-      {/* AI Insight below chart */}
       {insightText && (
         <div className="mt-3 pt-3 border-t border-white/[0.06]">
           <div className="flex items-start gap-2">
