@@ -53,6 +53,22 @@ export interface Kpi {
   category?: string;
 }
 
+export interface KpiComparison {
+  kpi_name: string;
+  current_value: number;
+  previous_value: number;
+  absolute_change: number;
+  percent_change: number | null;
+  direction: "up" | "down" | "flat";
+  comparison_available: boolean;
+}
+
+export interface KpiComparisonResponse {
+  session_id: string;
+  comparison_available: boolean;
+  comparisons: Record<string, KpiComparison>;
+}
+
 export interface ChartMeta {
   chart_id: string;
   chart_type: string;
@@ -160,12 +176,16 @@ export const AibiApi = {
     const { data } = await api.post("/api/upload", fd, {
       headers: { "Content-Type": "multipart/form-data" },
     });
-    return normaliseUploadResponse(data);   // ← add this
+    return normaliseUploadResponse(data);
   },
 
   analytics: async (sessionId: string, filters: DashboardFilters = {}) => {
     const { data } = await api.get(`/api/analytics/${sessionId}`, { params: filters });
-    return normaliseAnalyticsResponse(data);  // ← add this
+    return normaliseAnalyticsResponse(data);
+  },
+  comparison: async (sessionId: string, filters: DashboardFilters = {}) => {
+    const { data } = await api.get<KpiComparisonResponse>(`/api/analytics/${sessionId}/comparison`, { params: filters });
+    return data;
   },
   chart: async (sessionId: string, chartId: string, filters: DashboardFilters = {}) => {
     const { data } = await api.get<ChartData>(`/api/analytics/${sessionId}/chart/${chartId}`, { params: filters });
@@ -257,7 +277,6 @@ const authHeaders = () => {
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
-// Adapter — normalises FastAPI response shape to what the UI expects
 export const normaliseUploadResponse = (raw: any): UploadResponse => {
   const summary = raw.schema_summary || {};
   const files: FileSummary[] = (summary.files || []).map((f: any) => ({
@@ -293,8 +312,6 @@ export const normaliseUploadResponse = (raw: any): UploadResponse => {
   };
 };
 
-// Normalise analytics response — API returns 'name' but UI expects 'name' ✓
-// API returns 'chart_id' as number, UI expects string
 export const normaliseAnalyticsResponse = (raw: any): AnalyticsResponse => ({
   kpis  : raw.kpis  || [],
   charts: (raw.charts || []).map((c: any) => ({
