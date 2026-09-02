@@ -55,6 +55,16 @@ function Dashboard() {
     enabled: !!sessionId,
     retry: 1,
   });
+  const comparisonQuery = useQuery({
+    queryKey: ["analytics-comparison", sessionId, appliedFilters],
+    queryFn: () => AibiApi.comparison(sessionId!, appliedFilters),
+    enabled: !!sessionId && Boolean(
+      appliedFilters.date_column &&
+      appliedFilters.date_from &&
+      appliedFilters.date_to
+    ),
+    retry: 1,
+  });
   const insightsQuery = useQuery({
     queryKey: ["insights", sessionId],
     queryFn: async () => {
@@ -128,7 +138,19 @@ function Dashboard() {
 
       {data.kpis?.length > 0 && (
         <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {data.kpis.slice(0, 8).map((k, i) => <KpiCard key={k.name + i} k={k} i={i} />)}
+          {data.kpis.slice(0, 8).map((k, i) => (
+            <KpiCard
+              key={k.name + i}
+              k={k}
+              i={i}
+              comparison={comparisonQuery.data?.comparisons[k.name]}
+              comparisonRequested={Boolean(
+                appliedFilters.date_column &&
+                appliedFilters.date_from &&
+                appliedFilters.date_to
+              )}
+            />
+          ))}
         </div>
       )}
 
@@ -150,8 +172,30 @@ function Dashboard() {
   );
 }
 
-function KpiCard({ k, i }: { k: Kpi; i: number }) {
+function KpiCard({
+  k,
+  i,
+  comparison,
+  comparisonRequested,
+}: {
+  k: Kpi;
+  i: number;
+  comparison?: {
+    percent_change: number | null;
+    direction: "up" | "down" | "flat";
+    comparison_available: boolean;
+  };
+  comparisonRequested: boolean;
+}) {
   const val = typeof k.value === "number" ? formatNumber(k.value) : String(k.value);
+  const comparisonText = comparison?.comparison_available
+    ? comparison.percent_change === null
+      ? "No comparable baseline"
+      : `${comparison.direction === "up" ? "↑" : comparison.direction === "down" ? "↓" : "→"} ${Math.abs(comparison.percent_change).toFixed(1)}% vs previous period`
+    : comparisonRequested
+      ? "No comparison available"
+      : "Select a date range to compare";
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: i * 0.05 }}
@@ -165,7 +209,7 @@ function KpiCard({ k, i }: { k: Kpi; i: number }) {
           <span className="text-3xl font-semibold text-white tracking-tight">{val}</span>
           {k.unit && <span className="text-sm text-white/40">{k.unit}</span>}
         </div>
-        <div className="mt-3 text-xs text-white/35">No period comparison available</div>
+        <div className="mt-3 text-xs text-white/35">{comparisonText}</div>
       </div>
     </motion.div>
   );
