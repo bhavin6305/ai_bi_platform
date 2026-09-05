@@ -8,10 +8,11 @@ GET /api/sessions — lists all upload sessions (for the Streamlit session picke
 import logging
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from sqlalchemy import text
 
 from api.database import get_engine
+from api.routes.auth import auth_enabled, require_auth
 from analytics.chart_generator import generate_chart_data
 from analytics.filters import DashboardFilters, validate_filter_identifiers
 from analytics.kpi_engine import calculate_kpis
@@ -23,6 +24,7 @@ router = APIRouter()
 @router.get("/analytics/{session_id}")
 def get_analytics(
     session_id: str,
+    authorization: str | None = Header(default=None),
     date_column: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
@@ -36,6 +38,9 @@ def get_analytics(
 
     Streamlit dashboard page reads this to render the auto-generated charts.
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
 
     filters = _validated_filters(
@@ -106,11 +111,14 @@ def get_analytics(
 
 
 @router.get("/sessions")
-def list_sessions():
+def list_sessions(authorization: str | None = Header(default=None)):
     """
     List all upload sessions with their status.
     Used by Streamlit to let users pick a previous session.
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
 
     with engine.connect() as conn:
@@ -145,6 +153,7 @@ def list_sessions():
 def get_chart_data(
     session_id: str,
     chart_id: int,
+    authorization: str | None = Header(default=None),
     date_column: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
@@ -164,6 +173,9 @@ def get_chart_data(
             fig = px.line(x=data['x'], y=data['y'], title=data['title'])
             st.plotly_chart(fig)
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
     filters = _validated_filters(
         session_id, engine, date_column, date_from, date_to, category_column, category_value
@@ -175,8 +187,11 @@ def get_chart_data(
 
 
 @router.get("/analytics/{session_id}/filters")
-def get_filter_metadata(session_id: str):
+def get_filter_metadata(session_id: str, authorization: str | None = Header(default=None)):
     """Return validated date and category fields available for dashboard filters."""
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
     profiles = _schema_profiles(session_id, engine)
     if not profiles:

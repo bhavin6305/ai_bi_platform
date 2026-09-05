@@ -2,7 +2,7 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { AlertCircle, Check, ChevronDown, Download, Loader2, Sparkles, TrendingUp, TrendingDown, ArrowRight, Upload } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Download, Loader2, Sparkles, ArrowRight, Upload } from "lucide-react";
 import { AibiApi, getSessionId, type ChartData, type DashboardFilters, type FilterField, type Kpi } from "@/lib/aibi-api";
 
 const Plot = lazy(() => import("react-plotly.js"));
@@ -55,11 +55,20 @@ function Dashboard() {
     enabled: !!sessionId,
     retry: 1,
   });
+  const comparisonQuery = useQuery({
+    queryKey: ["analytics-comparison", sessionId, appliedFilters],
+    queryFn: () => AibiApi.comparison(sessionId!, appliedFilters),
+    enabled: !!sessionId && Boolean(
+      appliedFilters.date_column &&
+      appliedFilters.date_from &&
+      appliedFilters.date_to
+    ),
+    retry: 1,
+  });
   const insightsQuery = useQuery({
     queryKey: ["insights", sessionId],
     queryFn: async () => {
       const res = await AibiApi.insights(sessionId!);
-      // Build a map: chart_id → insight_text
       const map: Record<string, string> = {};
       res.insights.forEach((insight) => {
         if (insight.insight_text?.trim()) {
@@ -127,14 +136,24 @@ function Dashboard() {
         />
       ) : null}
 
-      {/* KPIs */}
       {data.kpis?.length > 0 && (
         <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {data.kpis.slice(0, 8).map((k, i) => <KpiCard key={k.name + i} k={k} i={i} />)}
+          {data.kpis.slice(0, 8).map((k, i) => (
+            <KpiCard
+              key={k.name + i}
+              k={k}
+              i={i}
+              comparison={comparisonQuery.data?.comparisons[k.name]}
+              comparisonRequested={Boolean(
+                appliedFilters.date_column &&
+                appliedFilters.date_from &&
+                appliedFilters.date_to
+              )}
+            />
+          ))}
         </div>
       )}
 
-      {/* Charts */}
       <div className={`mt-8 grid grid-cols-1 lg:grid-cols-2 ${compactMode ? "gap-2" : "gap-4"}`}>
         {(data.charts ?? []).map((c, i) => (
           <ChartCard
@@ -153,11 +172,30 @@ function Dashboard() {
   );
 }
 
-function KpiCard({ k, i }: { k: Kpi; i: number }) {
-  // fake trend from hash for visual polish
-  const trend = (k.name.length % 2 === 0 ? 1 : -1) * ((k.name.charCodeAt(0) % 15) + 3);
-  const up = trend >= 0;
+function KpiCard({
+  k,
+  i,
+  comparison,
+  comparisonRequested,
+}: {
+  k: Kpi;
+  i: number;
+  comparison?: {
+    percent_change: number | null;
+    direction: "up" | "down" | "flat";
+    comparison_available: boolean;
+  };
+  comparisonRequested: boolean;
+}) {
   const val = typeof k.value === "number" ? formatNumber(k.value) : String(k.value);
+  const comparisonText = comparison?.comparison_available
+    ? comparison.percent_change === null
+      ? "No comparable baseline"
+      : `${comparison.direction === "up" ? "↑" : comparison.direction === "down" ? "↓" : "→"} ${Math.abs(comparison.percent_change).toFixed(1)}% vs previous period`
+    : comparisonRequested
+      ? "No comparison available"
+      : "Select a date range to compare";
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, delay: i * 0.05 }}
@@ -171,10 +209,7 @@ function KpiCard({ k, i }: { k: Kpi; i: number }) {
           <span className="text-3xl font-semibold text-white tracking-tight">{val}</span>
           {k.unit && <span className="text-sm text-white/40">{k.unit}</span>}
         </div>
-        <div className="mt-3 flex items-center gap-1.5 text-xs" style={{ color: up ? "#34d399" : "#f87171" }}>
-          {up ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-          {up ? "+" : ""}{trend}% vs last period
-        </div>
+        <div className="mt-3 text-xs text-white/35">{comparisonText}</div>
       </div>
     </motion.div>
   );
@@ -204,7 +239,6 @@ function ChartCard({ sessionId, chartId, title, rationale, filters, i, insightTe
           </Suspense>
         )}
       </div>
-      {/* AI Insight below chart */}
       {insightText && (
         <div className="mt-3 pt-3 border-t border-white/[0.06]">
           <div className="flex items-start gap-2">

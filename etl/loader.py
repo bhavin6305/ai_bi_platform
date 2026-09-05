@@ -287,7 +287,7 @@ def _save_quality_reports(
             "total_rows"         : qr.original_rows,
             "duplicate_rows"     : qr.rows_removed,
             "columns_with_nulls" : 0,   # populated from cleaning_log.actions
-            "outlier_columns"    : 0,
+            "outlier_columns"    : qr.outlier_columns,
             "issues_found"       : json.dumps(qr.warnings),
             "actions_taken"      : json.dumps(qr.actions),
         })

@@ -7,13 +7,14 @@ Now uses Groq + Llama 3.1 for real Text-to-SQL answers.
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 
 from api.database import get_engine
+from api.routes.auth import auth_enabled, require_auth
 from ai.sql_generator  import generate_sql, execute_sql
-from ai.chat_assistant import explain_results
+from ai.chat_assistant import explain_results, suggest_followup_questions
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -34,11 +35,14 @@ class ChatResponse(BaseModel):
 
 
 @router.post("/chat", response_model=ChatResponse)
-def chat(request: ChatRequest):
+def chat(request: ChatRequest, authorization: str | None = Header(default=None)):
     """
     Accept a natural language question, convert to SQL,
     execute it, and return an AI-generated explanation.
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     if not request.session_id:
         raise HTTPException(status_code=400, detail="session_id is required.")
     if not request.question.strip():
@@ -68,6 +72,11 @@ def chat(request: ChatRequest):
         sql_used = sql,
         results  = results,
     )
+    followup_questions = suggest_followup_questions(
+        question = request.question,
+        answer   = answer,
+        results  = results,
+    )
 
     # Step 4: Save to ai_insights table
     try:
@@ -89,13 +98,16 @@ def chat(request: ChatRequest):
         answer     = answer,
         sql_used   = sql,
         row_count  = len(results),
-        followup_questions = [],
+        followup_questions = followup_questions,
     )
 
 
 @router.get("/chat/{session_id}/history")
-def chat_history(session_id: str):
+def chat_history(session_id: str, authorization: str | None = Header(default=None)):
     """Return saved chat responses for one uploaded dataset session."""
+    if auth_enabled():
+        require_auth(authorization)
+
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required.")
 

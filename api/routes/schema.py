@@ -11,17 +11,18 @@ live progress bar while the pipeline runs.
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import text
 
 from api.database import get_engine
+from api.routes.auth import auth_enabled, require_auth
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/schema/{session_id}")
-def get_schema(session_id: str):
+def get_schema(session_id: str, authorization: str | None = Header(default=None)):
     """
     Return the full schema profile for a session.
 
@@ -32,6 +33,9 @@ def get_schema(session_id: str):
         tables        : list of table profiles (columns, types, quality)
         relationships : list of FK/PK relationships detected
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
 
     with engine.connect() as conn:
@@ -130,7 +134,7 @@ def get_schema(session_id: str):
 
 
 @router.get("/status/{session_id}")
-def get_status(session_id: str):
+def get_status(session_id: str, authorization: str | None = Header(default=None)):
     """
     Return the current pipeline status for a session.
     Streamlit polls this to show a live progress bar.
@@ -145,6 +149,9 @@ def get_status(session_id: str):
         'done'       → pipeline complete
         'error'      → pipeline failed
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
 
     with engine.connect() as conn:

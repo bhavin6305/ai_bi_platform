@@ -11,7 +11,7 @@ export const Route = createFileRoute("/app/chat")({
   component: ChatPage,
 });
 
-type Msg = { id: string; role: "user" | "ai"; text: string; sql?: string; pending?: boolean };
+type Msg = { id: string; role: "user" | "ai"; text: string; sql?: string; followups?: string[]; pending?: boolean };
 
 const SUGGESTIONS = [
   "What are the top trends in this data?",
@@ -62,7 +62,13 @@ function ChatPage() {
       let i = 0;
       const iv = setInterval(() => {
         i += Math.max(2, Math.round(full.length / 60));
-        setMessages((prev) => prev.map((m) => m.id === aid ? { ...m, text: full.slice(0, i), sql: res.sql_used, pending: i < full.length } : m));
+        setMessages((prev) => prev.map((m) => m.id === aid ? {
+          ...m,
+          text: full.slice(0, i),
+          sql: res.sql_used,
+          followups: i >= full.length ? (res.followup_questions ?? []) : undefined,
+          pending: i < full.length,
+        } : m));
         if (i >= full.length) clearInterval(iv);
       }, 25);
     } catch (e: any) {
@@ -122,7 +128,7 @@ function ChatPage() {
             </div>
           ) : (
             <div className="space-y-6">
-              {messages.map((m) => m.role === "user" ? <UserBubble key={m.id} m={m} /> : <AIBubble key={m.id} m={m} />)}
+              {messages.map((m) => m.role === "user" ? <UserBubble key={m.id} m={m} /> : <AIBubble key={m.id} m={m} onFollowup={send} />)}
             </div>
           )}
         </div>
@@ -173,7 +179,7 @@ function UserBubble({ m }: { m: Msg }) {
   );
 }
 
-function AIBubble({ m }: { m: Msg }) {
+function AIBubble({ m, onFollowup }: { m: Msg; onFollowup: (question: string) => void }) {
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="flex gap-3">
       <div className="h-8 w-8 rounded-xl grid place-items-center shrink-0"
@@ -203,6 +209,23 @@ function AIBubble({ m }: { m: Msg }) {
             </motion.div>
           )}
         </AnimatePresence>
+        {m.followups && m.followups.length > 0 && (
+          <div className="pt-1">
+            <div className="mb-2 text-[10px] uppercase tracking-widest text-white/35">Continue exploring</div>
+            <div className="flex flex-wrap gap-2">
+              {m.followups.slice(0, 3).map((followup) => (
+                <button
+                  key={followup}
+                  type="button"
+                  onClick={() => onFollowup(followup)}
+                  className="rounded-full border border-white/10 bg-white/[0.04] px-3 py-2 text-left text-xs text-white/65 transition hover:border-violet-400/40 hover:bg-violet-400/10 hover:text-white"
+                >
+                  {followup}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
       </div>
     </motion.div>
   );
