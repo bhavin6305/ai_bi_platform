@@ -148,7 +148,7 @@ def _calculate_kpis(
                     if aov is not None:
                         all_kpis.append(KPIResult(
                             "Avg Order Value",
-                            round(float(aov), 2),
+                            float(aov),
                             "currency",
                             "sales",
                             "${value:,.2f}",

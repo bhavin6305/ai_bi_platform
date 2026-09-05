@@ -62,6 +62,7 @@ class CleaningLog:
     original_rows     : int
     final_rows        : int
     rows_removed      : int = 0
+    outlier_columns   : int = 0
     actions           : list[str] = field(default_factory=list)
     warnings          : list[str] = field(default_factory=list)
 
@@ -557,6 +558,7 @@ def _flag_outliers(
         outlier_count = int(df[flag_col_name].sum())
         if outlier_count > 0:
             flagged_cols.append(col)
+            log.outlier_columns += 1
             log.add_action(
                 f"Column '{col}': flagged {outlier_count} outlier values "
                 f"(outside [{lower_bound:.2f}, {upper_bound:.2f}]) "

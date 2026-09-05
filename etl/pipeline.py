@@ -212,6 +212,8 @@ def run_pipeline(
             session_id, "data_loaded", "Data loading completed",
             f"Loaded {load_summary.get('total_rows', 0):,} row(s) into PostgreSQL.",
         )
+        from api.routes.notifications import create_anomaly_notification
+        create_anomaly_notification(session_id, cleaned_tables)
     except Exception as e:
         logger.error("Pipeline failed at loading: %s", e)
         _upsert_upload_session(session_id=session_id, status="error", engine=engine)

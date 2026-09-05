@@ -13,7 +13,7 @@ from sqlalchemy import text
 
 from api.database import get_engine
 from ai.sql_generator  import generate_sql, execute_sql
-from ai.chat_assistant import explain_results
+from ai.chat_assistant import explain_results, suggest_followup_questions
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -68,6 +68,11 @@ def chat(request: ChatRequest):
         sql_used = sql,
         results  = results,
     )
+    followup_questions = suggest_followup_questions(
+        question = request.question,
+        answer   = answer,
+        results  = results,
+    )
 
     # Step 4: Save to ai_insights table
     try:
@@ -89,7 +94,7 @@ def chat(request: ChatRequest):
         answer     = answer,
         sql_used   = sql,
         row_count  = len(results),
-        followup_questions = [],
+        followup_questions = followup_questions,
     )
 
 

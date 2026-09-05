@@ -11,6 +11,43 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+def anomaly_notification_details(cleaned_tables: list | None) -> tuple[str, str] | None:
+    """Build one session-level alert from tables with flagged outliers."""
+    if not cleaned_tables:
+        return None
+
+    affected = []
+    for cleaned in cleaned_tables:
+        if cleaned is None:
+            continue
+
+        cleaning_log = getattr(cleaned, "cleaning_log", None)
+        count = getattr(cleaning_log, "outlier_columns", 0) or 0
+        table_name = getattr(cleaned, "table_name", "unknown")
+
+        if count:
+            affected.append(f"{table_name} ({count} column(s))")
+
+    if not affected:
+        return None
+
+    return (
+        "Anomalies detected",
+        "Extreme values were flagged for review in " + ", ".join(affected) + ".",
+    )
+
+
+def create_anomaly_notification(session_id: str, cleaned_tables: list | None) -> None:
+    """Persist an anomaly alert without interrupting the upload pipeline."""
+    if not cleaned_tables:
+        return
+
+    details = anomaly_notification_details(cleaned_tables)
+    if details:
+        title, message = details
+        create_notification(session_id, "anomaly_detected", title, message)
+
+
 def ensure_notifications_table() -> None:
     with get_engine().begin() as conn:
         conn.execute(text("""
