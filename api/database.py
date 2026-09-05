@@ -17,6 +17,22 @@ from sqlalchemy.engine import Engine
 load_dotenv()
 
 
+def build_database_url() -> str:
+    """Return the DB URL, allowing an explicit override while keeping local defaults."""
+    db_url = os.getenv("DB_URL")
+    if db_url:
+        return db_url
+
+    return (
+        f"postgresql+psycopg2://"
+        f"{os.getenv('DB_USER', 'postgres')}:"
+        f"{os.getenv('DB_PASSWORD', '')}@"
+        f"{os.getenv('DB_HOST', 'localhost')}:"
+        f"{os.getenv('DB_PORT', '5432')}/"
+        f"{os.getenv('DB_NAME', 'ai_bi_platform')}"
+    )
+
+
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
     """
@@ -33,14 +49,7 @@ def get_engine() -> Engine:
                              (prevents 'connection already closed' errors
                               after PostgreSQL restarts)
     """
-    db_url = (
-        f"postgresql+psycopg2://"
-        f"{os.getenv('DB_USER', 'postgres')}:"
-        f"{os.getenv('DB_PASSWORD', '')}@"
-        f"{os.getenv('DB_HOST', 'localhost')}:"
-        f"{os.getenv('DB_PORT', '5432')}/"
-        f"{os.getenv('DB_NAME', 'ai_bi_platform')}"
-    )
+    db_url = build_database_url()
 
     return create_engine(
         db_url,

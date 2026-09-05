@@ -14,10 +14,50 @@ from groq import Groq
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
 
+from api.config import retry_with_backoff
+
 logger = logging.getLogger(__name__)
 
-client = Groq(api_key=os.environ.get("GROQ_API_KEY"))
-MODEL  = "openai/gpt-oss-120b"
+MODEL = "openai/gpt-oss-120b"
+
+
+def require_groq_api_key() -> str:
+    """Raise a clear error when the Groq API key is missing."""
+    key = os.environ.get("GROQ_API_KEY")
+    if not key or not key.strip():
+        raise ValueError("GROQ_API_KEY is not configured. Set it before calling the AI chat pipeline.")
+    return key.strip()
+
+
+def get_groq_client() -> Groq:
+    """Build a Groq client lazily so the app can validate env config without crashing during import."""
+    return Groq(api_key=require_groq_api_key())
+
+
+def validate_select_sql(sql: str) -> str:
+    """Ensure generated SQL remains read-only and cannot smuggle additional statements."""
+    if sql is None:
+        raise ValueError("SQL cannot be empty.")
+
+    cleaned = sql.strip()
+    if not cleaned:
+        raise ValueError("SQL cannot be empty.")
+
+    cleaned = cleaned.rstrip(";")
+    if not cleaned.upper().startswith("SELECT"):
+        raise ValueError("Only SELECT queries are allowed.")
+
+    if re.search(r";\s*(?:--|/\*|SELECT|INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|EXEC|CALL)", cleaned, flags=re.IGNORECASE):
+        raise ValueError("Only a single read-only SELECT statement is allowed.")
+
+    if re.search(r"--|/\*\s*|\*/", cleaned, flags=re.IGNORECASE):
+        raise ValueError("SQL comments are not allowed.")
+
+    dangerous = re.compile(r"\b(INSERT|UPDATE|DELETE|DROP|ALTER|CREATE|TRUNCATE|GRANT|REVOKE|EXEC|CALL)\b", re.IGNORECASE)
+    if dangerous.search(cleaned):
+        raise ValueError("Only SELECT queries are allowed.")
+
+    return cleaned
 
 def generate_sql(
     question   : str,
@@ -77,24 +117,29 @@ Original question: {question}
 Corrected SQL:"""
 
         try:
-            response = client.chat.completions.create(
-                model      = MODEL,
-                messages   = [
-                    {
-                        "role"   : "system",
-                        "content": (
-                            "You are a PostgreSQL expert. You ONLY use column names "
-                            "that are explicitly provided to you in the schema. "
-                            "You NEVER invent or guess column names. "
-                            "If you cannot answer the question with the available columns, "
-                            "write a simple COUNT(*) query instead."
-                        )
-                    },
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens = 300,
-                temperature= 0.0,   # zero temperature = most deterministic, less hallucination
-            )
+            def call_model():
+                client = get_groq_client()
+                response = client.chat.completions.create(
+                    model      = MODEL,
+                    messages   = [
+                        {
+                            "role"   : "system",
+                            "content": (
+                                "You are a PostgreSQL expert. You ONLY use column names "
+                                "that are explicitly provided to you in the schema. "
+                                "You NEVER invent or guess column names. "
+                                "If you cannot answer the question with the available columns, "
+                                "write a simple COUNT(*) query instead."
+                            )
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens = 300,
+                    temperature= 0.0,
+                )
+                return response
+
+            response = retry_with_backoff(call_model, max_attempts=2, retry_exceptions=(TimeoutError, ConnectionError, OSError))
             raw_sql = response.choices[0].message.content.strip()
 
             # Clean markdown
@@ -102,9 +147,7 @@ Corrected SQL:"""
             raw_sql = re.sub(r"```\s*",    "", raw_sql)
             raw_sql = raw_sql.strip()
 
-            # Safety — only SELECT
-            if not raw_sql.upper().startswith("SELECT"):
-                raise ValueError(f"Not a SELECT statement: {raw_sql[:60]}")
+            raw_sql = validate_select_sql(raw_sql)
 
             # Try executing — if it fails, retry with the error
             test_result = _try_execute(raw_sql, engine)
@@ -154,11 +197,9 @@ def _try_execute(sql: str, engine: Engine) -> list | None:
 
 def execute_sql(sql: str, engine: Engine) -> list[dict]:
     """Execute a validated SQL query and return results."""
-    sql_upper = sql.strip().upper()
-    if not sql_upper.startswith("SELECT"):
-        raise ValueError("Only SELECT queries are allowed.")
+    validated = validate_select_sql(sql)
     try:
-        return _try_execute(sql, engine)
+        return _try_execute(validated, engine)
     except SQLExecutionError as e:
         raise ValueError(f"Query execution failed: {e}")
 def _build_schema_context(short_id: str, engine: Engine) -> str:

@@ -15,6 +15,7 @@ import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from api.config import get_allowed_cors_origins, get_app_environment
 from api.database import test_connection
 from api.routes import upload, schema, analytics, kpis, chat, auth, notifications, reports, comparisons
 
@@ -34,7 +35,7 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins     = ["*"],
+    allow_origins     = get_allowed_cors_origins(),
     allow_credentials = True,
     allow_methods     = ["*"],
     allow_headers     = ["*"],
@@ -54,7 +55,7 @@ app.include_router(reports.router, prefix="/api", tags=["Reports"])
 @app.on_event("startup")
 async def startup_event():
     """Run checks when the server starts."""
-    logger.info("Starting AI-Powered BI Platform API...")
+    logger.info("Starting AI-Powered BI Platform API in %s mode...", get_app_environment())
     if test_connection():
         logger.info("✓ PostgreSQL connection successful.")
     else:

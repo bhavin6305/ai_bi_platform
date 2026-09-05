@@ -2,10 +2,11 @@
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from sqlalchemy import text
 
 from api.database import get_engine
+from api.routes.auth import auth_enabled, require_auth
 from analytics.filters import DashboardFilters, validate_filter_identifiers
 from analytics.kpi_comparison import compare_kpis
 
@@ -15,6 +16,7 @@ router = APIRouter()
 @router.get("/analytics/{session_id}/comparison")
 def get_kpi_comparison(
     session_id: str,
+    authorization: str | None = Header(default=None),
     date_column: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
@@ -28,6 +30,9 @@ def get_kpi_comparison(
     forward unchanged. If no valid comparison exists, the response is empty
     rather than fabricating a percentage.
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
 
     with engine.connect() as conn:

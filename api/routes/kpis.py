@@ -10,17 +10,18 @@ it calculates basic ones on the fly from the session's data.
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import text
 
 from api.database import get_engine
+from api.routes.auth import auth_enabled, require_auth
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
 @router.get("/kpis/{session_id}")
-def get_kpis(session_id: str):
+def get_kpis(session_id: str, authorization: str | None = Header(default=None)):
     """
     Return all KPI values calculated for a session.
 
@@ -28,6 +29,9 @@ def get_kpis(session_id: str):
         session_id : str
         kpis       : list of {kpi_name, kpi_value, kpi_unit, kpi_category}
     """
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
 
     with engine.connect() as conn:

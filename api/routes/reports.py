@@ -2,11 +2,12 @@
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from analytics.filters import DashboardFilters
 from api.database import get_engine
+from api.routes.auth import auth_enabled, require_auth
 from api.routes.analytics import _validated_filters
 from reports.pdf_report import build_pdf_report
 
@@ -16,6 +17,7 @@ router = APIRouter()
 @router.get("/reports/{session_id}.pdf")
 def download_report(
     session_id: str,
+    authorization: str | None = Header(default=None),
     date_column: str | None = Query(default=None),
     date_from: date | None = Query(default=None),
     date_to: date | None = Query(default=None),
@@ -23,6 +25,9 @@ def download_report(
     category_value: str | None = Query(default=None),
 ):
     """Generate an in-memory PDF matching the current dashboard filters."""
+    if auth_enabled():
+        require_auth(authorization)
+
     engine = get_engine()
     filters = _validated_filters(
         session_id, engine, date_column, date_from, date_to, category_column, category_value

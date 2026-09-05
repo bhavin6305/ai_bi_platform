@@ -2,10 +2,11 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import text
 
 from api.database import get_engine
+from api.routes.auth import auth_enabled, require_auth
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -85,7 +86,10 @@ def create_notification(session_id: str, event_type: str, title: str, message: s
 
 
 @router.get("/notifications/{session_id}")
-def list_notifications(session_id: str):
+def list_notifications(session_id: str, authorization: str | None = Header(default=None)):
+    if auth_enabled():
+        require_auth(authorization)
+
     try:
         ensure_notifications_table()
         with get_engine().connect() as conn:
@@ -119,7 +123,10 @@ def list_notifications(session_id: str):
 
 
 @router.post("/notifications/{session_id}/read")
-def mark_notifications_read(session_id: str):
+def mark_notifications_read(session_id: str, authorization: str | None = Header(default=None)):
+    if auth_enabled():
+        require_auth(authorization)
+
     ensure_notifications_table()
     with get_engine().begin() as conn:
         conn.execute(

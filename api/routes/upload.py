@@ -14,17 +14,70 @@ This is the trigger for the entire platform:
 
 import logging
 
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, Header, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 
+from api.config import retry_with_backoff
+from api.routes.auth import auth_enabled, require_auth
 from etl.pipeline import run_pipeline
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+MAX_UPLOAD_BYTES = 25 * 1024 * 1024
+SUPPORTED_TYPES = {".csv", ".xlsx", ".xls", ".zip"}
+
+
+def validate_upload_files(files: list[UploadFile]) -> None:
+    """Reject unsupported file types and excessive upload sizes before the ETL runs."""
+    if not files:
+        raise ValueError("No files provided.")
+
+    for f in files:
+        filename = getattr(f, "filename", "") or ""
+        suffix = "." + filename.split(".")[-1].lower() if "." in filename else ""
+        if suffix not in SUPPORTED_TYPES:
+            raise ValueError(
+                f"Unsupported file type '{suffix}' for file '{filename}'. "
+                f"Supported: {', '.join(sorted(SUPPORTED_TYPES))}"
+            )
+
+        stream = getattr(f, "file", None)
+        if stream is not None:
+            try:
+                size = None
+                try:
+                    current_pos = stream.tell()
+                except (AttributeError, OSError, ValueError):
+                    current_pos = None
+
+                try:
+                    if hasattr(stream, "seek"):
+                        stream.seek(0, 2)
+                        size = stream.tell()
+                        if current_pos is not None:
+                            stream.seek(current_pos)
+                        else:
+                            stream.seek(0)
+                    else:
+                        size = len(stream.read())
+                except (AttributeError, OSError, ValueError):
+                    size = len(stream.read())
+
+                if size is not None and size > MAX_UPLOAD_BYTES:
+                    raise ValueError(
+                        f"File '{filename}' is too large ({size} bytes). "
+                        f"Maximum supported size is {MAX_UPLOAD_BYTES} bytes."
+                    )
+            except (AttributeError, OSError):
+                pass
+
 
 @router.post("/upload")
-async def upload_files(files: list[UploadFile] = File(...)):
+async def upload_files(
+    files: list[UploadFile] = File(...),
+    authorization: str | None = Header(default=None),
+):
     """
     Upload one or more CSV/Excel files (or a ZIP containing them).
     Triggers the full ETL pipeline and returns the session profile.
@@ -44,26 +97,20 @@ async def upload_files(files: list[UploadFile] = File(...)):
         views_created   : list of SQL VIEW names created
         schema_summary  : full schema profile (column types, quality scores, relationships)
     """
-    if not files:
-        raise HTTPException(status_code=400, detail="No files provided.")
+    if auth_enabled():
+        require_auth(authorization)
 
-    # Validate file types before running the pipeline
-    supported = {".csv", ".xlsx", ".xls", ".zip"}
-    for f in files:
-        suffix = "." + f.filename.split(".")[-1].lower() if "." in f.filename else ""
-        if suffix not in supported:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported file type '{suffix}' for file '{f.filename}'. "
-                       f"Supported: {', '.join(supported)}"
-            )
+    try:
+        validate_upload_files(files)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     logger.info("Received %d file(s) for upload: %s", len(files), [f.filename for f in files])
 
     try:
         # Run the full pipeline — this is synchronous and may take 10-60 seconds
         # for large files. In production you would use a background task queue.
-        result = run_pipeline(files=files)
+        result = retry_with_backoff(run_pipeline, files=files, max_attempts=2)
 
         return JSONResponse(
             status_code = 200 if result.status == "done" else 207,

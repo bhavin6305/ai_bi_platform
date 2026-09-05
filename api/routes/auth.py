@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
@@ -66,6 +67,37 @@ def _ensure_auth_tables() -> None:
 
 def _normalise_email(email: str) -> str:
     return email.strip().lower()
+
+
+def auth_enabled() -> bool:
+    """Return True when auth is explicitly required for the active environment."""
+    explicit = os.getenv("REQUIRE_AUTH", "").strip().lower()
+    if explicit in {"1", "true", "yes", "on"}:
+        return True
+    if explicit in {"0", "false", "no", "off"}:
+        return False
+    env = os.getenv("APP_ENV", "development").strip().lower()
+    return env in {"production", "prod", "staging", "stage"}
+
+
+def require_auth(authorization: str | None) -> dict | None:
+    """Validate a bearer token when auth enforcement is enabled."""
+    if not auth_enabled():
+        return None
+    token = _token_from_header(authorization)
+    _ensure_auth_tables()
+    with get_engine().connect() as conn:
+        user = conn.execute(
+            text("""
+                SELECT u.user_id, u.full_name, u.email
+                FROM auth_sessions s JOIN app_users u ON u.user_id = s.user_id
+                WHERE s.session_id = :token AND s.expires_at > NOW()
+            """),
+            {"token": token},
+        ).mappings().fetchone()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+    return dict(user)
 
 
 def _hash_password(password: str, salt: bytes) -> str:
@@ -158,22 +190,10 @@ def signin(payload: SignInRequest):
 
 @router.get("/me")
 def current_user(authorization: str | None = Header(default=None)):
-    if not authorization or not authorization.lower().startswith("bearer "):
+    user = require_auth(authorization)
+    if user is None:
         raise HTTPException(status_code=401, detail="Authentication required.")
-    token = authorization[7:].strip()
-    _ensure_auth_tables()
-    with get_engine().connect() as conn:
-        user = conn.execute(
-            text("""
-                SELECT u.user_id, u.full_name, u.email
-                FROM auth_sessions s JOIN app_users u ON u.user_id = s.user_id
-                WHERE s.session_id = :token AND s.expires_at > NOW()
-            """),
-            {"token": token},
-        ).mappings().fetchone()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid or expired session.")
-    return {"user": dict(user)}
+    return {"user": user}
 
 
 def _token_from_header(authorization: str | None) -> str:
@@ -184,6 +204,8 @@ def _token_from_header(authorization: str | None) -> str:
 
 @router.post("/logout", status_code=204)
 def logout(authorization: str | None = Header(default=None)):
+    if not auth_enabled():
+        return None
     token = _token_from_header(authorization)
     _ensure_auth_tables()
     with get_engine().begin() as conn:
@@ -192,6 +214,9 @@ def logout(authorization: str | None = Header(default=None)):
 
 @router.get("/settings")
 def get_settings(authorization: str | None = Header(default=None)):
+    user = require_auth(authorization)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Authentication required.")
     token = _token_from_header(authorization)
     _ensure_auth_tables()
     with get_engine().connect() as conn:
@@ -211,6 +236,8 @@ def get_settings(authorization: str | None = Header(default=None)):
 
 @router.patch("/settings")
 def update_settings(payload: SettingsUpdate, authorization: str | None = Header(default=None)):
+    if auth_enabled():
+        require_auth(authorization)
     token = _token_from_header(authorization)
     _ensure_auth_tables()
     updates = payload.model_dump(exclude_none=True)
