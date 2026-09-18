@@ -17,6 +17,15 @@ def test_build_database_url_uses_environment_values(monkeypatch):
     assert "postgresql+psycopg2://app_user:secret@prod-db:5433/analytics" in url
 
 
+def test_build_database_url_rejects_production_defaults(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    for name in ("DB_URL", "DB_USER", "DB_PASSWORD", "DB_HOST", "DB_NAME"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(ValueError, match="Production database configuration"):
+        build_database_url()
+
+
 def test_validate_upload_files_rejects_oversized_file():
     class DummyFile:
         filename = "large.csv"

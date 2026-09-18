@@ -14,6 +14,8 @@ from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
 from sqlalchemy.engine import Engine
 
+from api.config import is_production_like
+
 load_dotenv()
 
 
@@ -22,6 +24,14 @@ def build_database_url() -> str:
     db_url = os.getenv("DB_URL")
     if db_url:
         return db_url
+
+    if is_production_like():
+        required = ["DB_USER", "DB_PASSWORD", "DB_HOST", "DB_NAME"]
+        missing = [name for name in required if not os.getenv(name, "").strip()]
+        if missing:
+            raise ValueError(
+                "Production database configuration is missing: " + ", ".join(missing)
+            )
 
     return (
         f"postgresql+psycopg2://"

@@ -1,3 +1,4 @@
+pytest==8.2.2
 # ── Data ingestion & processing ──────────────────────────────────────────────
 pandas==2.2.2
 numpy==1.26.4
@@ -16,6 +17,8 @@ pydantic==2.7.1
 python-dotenv==1.0.1
 python-multipart==0.0.9   # needed for FastAPI file upload endpoint
 httpx==0.27.0
+redis==5.0.4
+boto3==1.34.131
 
 # ── Machine Learning (trained on Colab, served locally) ───────────────────────
 scikit-learn==1.4.2

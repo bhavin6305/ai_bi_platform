@@ -40,6 +40,11 @@ The platform is designed to help users:
 - result explanation and follow-up question suggestions
 - saved AI chat history per session
 
+### Machine learning
+- train churn, monthly forecast, and RFM segmentation models from prepared CSVs
+- persist versioned-ready model artifacts under `ML_MODEL_DIR` (default: `ml/models`)
+- expose training through the protected `POST /api/ml/train?model_type=...` endpoint
+
 ### Reporting and notifications
 - PDF report generation for session analytics
 - notification persistence for pipeline and anomaly events
@@ -131,6 +136,13 @@ Example variables:
 - `APP_ENV`
 - `REQUIRE_AUTH`
 - `CORS_ALLOW_ORIGINS`
+- `RATE_LIMIT_REQUESTS` (default: 60 requests per window)
+- `RATE_LIMIT_WINDOW_SECONDS` (default: 60 seconds)
+- `REDIS_URL` (required for production-like deployments)
+- `ETL_ASYNC` (set to `true` to use the Redis-backed ETL worker)
+- `UPLOAD_STAGING_DIR` (default: `data/staging`)
+- `UPLOAD_STORAGE` (`local` by default; use `s3` for distributed workers)
+- `S3_BUCKET`, `S3_PREFIX`, `S3_ENDPOINT_URL` (required when using S3 storage)
 - `GROQ_API_KEY`
 - `JWT_SECRET_KEY`
 
@@ -144,6 +156,11 @@ The API will be available at:
 
 - http://localhost:8000
 - http://localhost:8000/docs
+
+Operational probes:
+
+- `/health` reports API and database state for diagnostics.
+- `/ready` returns HTTP 503 until the database dependency is available, making it suitable for load balancer readiness checks.
 
 ### 5. Start the frontend
 
@@ -175,17 +192,61 @@ This project is stable for controlled internal deployment and is structured to b
 - set `APP_ENV=production`
 - set `REQUIRE_AUTH=true`
 - restrict `CORS_ALLOW_ORIGINS` to trusted domains only
+- configure `RATE_LIMIT_REQUESTS` and `RATE_LIMIT_WINDOW_SECONDS` for expected traffic
+- configure `REDIS_URL` so rate-limit counters are shared across API instances
+- provide an explicit `DB_URL` or complete `DB_USER`, `DB_PASSWORD`, `DB_HOST`, and `DB_NAME` values
+- scrape `/metrics` through an internal monitoring network
+
+For large uploads, set `ETL_ASYNC=true` and run a worker alongside the API:
+
+```bash
+python -m etl.worker
+```
+
+Uploaded files are staged temporarily, queued in Redis, processed by the worker,
+and removed after processing. The upload endpoint returns HTTP 202 and the
+existing `/api/status/{session_id}` endpoint reports progress.
+
+For API and worker processes on different machines, use `UPLOAD_STORAGE=s3`
+with an S3-compatible bucket and configure `S3_BUCKET`, `S3_PREFIX`, and AWS or
+endpoint-specific credentials.
+
+Create and verify database backups with:
+
+```bash
+python -m ops.database_backup backup backups/latest.dump
+python -m ops.database_backup verify backups/latest.dump
+python -m ops.database_backup restore backups/latest.dump --confirm-destructive-restore
+```
+
+The `/metrics` endpoint exposes Prometheus-compatible request counters and
+latency buckets. Route its output to a monitoring system and alert on sustained
+5xx responses, 429 responses, queue depth, and failed worker jobs.
+
+Train an ML artifact by sending a prepared CSV to the API:
+
+```bash
+curl -X POST "http://localhost:8000/api/ml/train?model_type=segmentation" \
+	-F "file=@customer_features.csv"
+```
+
+Use `model_type=churn` for customer rows containing the churn feature columns
+and `churn_label`, `model_type=forecast` for `month` and `total_revenue`, or
+`model_type=segmentation` for the RFM columns. In production, protect this
+endpoint with authentication and point `ML_MODEL_DIR` at durable shared storage.
 - store secrets in environment variables or a secret manager
 - run PostgreSQL in a managed or dedicated environment
 - monitor database and API health continuously
 
-This is a solid production-ready internal deployment baseline, but public SaaS production hardening still includes additional operational safeguards such as:
+The application hardening baseline is implemented. Public SaaS deployment still
+requires operating the external services and controls described above, including
+secret management, PostgreSQL backup scheduling, Redis, object storage, and
+monitoring alert rules.
 
-- secret management at scale
-- rate limiting and abuse controls
-- centralized logging and monitoring
-- backup and restore validation
-- queue-based async processing for very large data uploads
+API requests emit structured logs through the `api.requests` logger with method,
+path, status code, duration, and a correlation ID. Responses include the same
+correlation ID in the `X-Request-ID` header for incident tracing. Request bodies,
+query values, and authorization headers are intentionally excluded.
 
 ## Testing
 

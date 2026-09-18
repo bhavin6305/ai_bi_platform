@@ -39,6 +39,15 @@ class SettingsUpdate(BaseModel):
     timezone: str | None = Field(default=None, max_length=80)
 
 
+DEFAULT_SETTINGS = {
+    "full_name": "Local User",
+    "email_updates": True,
+    "compact_mode": False,
+    "show_insights": True,
+    "timezone": "UTC",
+}
+
+
 def _ensure_auth_tables() -> None:
     with get_engine().begin() as conn:
         conn.execute(text("""
@@ -216,7 +225,7 @@ def logout(authorization: str | None = Header(default=None)):
 def get_settings(authorization: str | None = Header(default=None)):
     user = require_auth(authorization)
     if user is None:
-        raise HTTPException(status_code=401, detail="Authentication required.")
+        return {"settings": DEFAULT_SETTINGS.copy()}
     token = _token_from_header(authorization)
     _ensure_auth_tables()
     with get_engine().connect() as conn:
@@ -238,6 +247,9 @@ def get_settings(authorization: str | None = Header(default=None)):
 def update_settings(payload: SettingsUpdate, authorization: str | None = Header(default=None)):
     if auth_enabled():
         require_auth(authorization)
+    elif not authorization:
+        settings = {**DEFAULT_SETTINGS, **payload.model_dump(exclude_none=True)}
+        return {"settings": settings}
     token = _token_from_header(authorization)
     _ensure_auth_tables()
     updates = payload.model_dump(exclude_none=True)

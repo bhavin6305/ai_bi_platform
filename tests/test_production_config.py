@@ -18,6 +18,14 @@ def test_get_allowed_cors_origins_supports_csv(monkeypatch):
     ]
 
 
+def test_get_allowed_cors_origins_rejects_wildcard_in_production(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.delenv("CORS_ALLOW_ORIGINS", raising=False)
+
+    with pytest.raises(ValueError, match="trusted origins"):
+        get_allowed_cors_origins()
+
+
 def test_retry_with_backoff_retries_transient_errors():
     attempts = {"count": 0}
 

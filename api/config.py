@@ -2,6 +2,10 @@ import os
 import time
 from typing import Any, Callable, TypeVar
 
+from dotenv import load_dotenv
+
+load_dotenv(override=False)
+
 T = TypeVar("T")
 
 
@@ -18,6 +22,10 @@ def is_production_like() -> bool:
 def get_allowed_cors_origins() -> list[str]:
     raw = os.getenv("CORS_ALLOW_ORIGINS", "*")
     if raw.strip() == "*":
+        if is_production_like():
+            raise ValueError(
+                "CORS_ALLOW_ORIGINS must list trusted origins in production"
+            )
         return ["*"]
     return [origin.strip() for origin in raw.split(",") if origin.strip()]
 

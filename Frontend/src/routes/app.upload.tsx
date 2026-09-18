@@ -69,12 +69,19 @@ function UploadPage() {
       toast.success(`Loaded ${data.schema_summary.files?.length ?? 0} tables · ${(data.schema_summary.total_rows ?? 0).toLocaleString()} rows`);
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.detail ?? err?.message ?? "Upload failed. Is the API running on port 8000?");
+      const detail = err?.response?.data?.detail;
+      const status = err?.response?.status;
+      const message = detail
+        ? `Upload failed (${status ?? "API"}): ${detail}`
+        : err?.request
+          ? "Upload could not reach the API. Confirm the API is running on port 8000 and refresh this page."
+          : err?.message ?? "Upload failed.";
+      toast.error(message);
     },
   });
 
   useEffect(() => {
-    if (!mut.isPending) return;
+    if (!result?.session_id || result.status === "done" || result.status === "error") return;
   
     const interval = setInterval(async () => {
       try {
@@ -91,11 +98,18 @@ function UploadPage() {
         };
   
         setPipelineStatus(statusMessages[s.status] || s.status);
+        setResult((previous) => previous ? { ...previous, status: s.status } : previous);
+        if (s.status === "done") {
+          toast.success("Your dataset is ready.");
+          nav({ to: "/app/dashboard" });
+        } else if (s.status === "error") {
+          toast.error("The ETL pipeline failed. Check the upload status for details.");
+        }
       } catch {}
     }, 2000);
   
     return () => clearInterval(interval);
-  }, [mut.isPending, result?.session_id]);
+  }, [nav, result?.session_id, result?.status]);
   return (
     <div className="max-w-6xl mx-auto px-6 py-10">
       <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5 }}>

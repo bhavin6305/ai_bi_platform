@@ -1,8 +1,7 @@
 import axios from "axios";
 
 export const API_BASE =
-  (typeof window !== "undefined" && (window as any).__AIBI_API__) ||
-  "http://localhost:8000";
+  (typeof window !== "undefined" && (window as any).__AIBI_API__) || "http://127.0.0.1:8000";
 
 export const api = axios.create({
   baseURL: API_BASE,
@@ -10,7 +9,13 @@ export const api = axios.create({
 });
 
 export type DetectedType =
-  | "id" | "datetime" | "currency" | "numeric" | "category" | "text" | "boolean";
+  | "id"
+  | "datetime"
+  | "currency"
+  | "numeric"
+  | "category"
+  | "text"
+  | "boolean";
 
 export interface ColumnSchema {
   column_name: string;
@@ -38,6 +43,16 @@ export interface Relationship {
 
 export interface UploadResponse {
   session_id: string;
+  status:
+    | "pending"
+    | "profiling"
+    | "extracting"
+    | "cleaning"
+    | "loading"
+    | "joining"
+    | "analyzing"
+    | "done"
+    | "error";
   schema_summary: {
     files: FileSummary[];
     relationships?: Relationship[];
@@ -184,11 +199,16 @@ export const AibiApi = {
     return normaliseAnalyticsResponse(data);
   },
   comparison: async (sessionId: string, filters: DashboardFilters = {}) => {
-    const { data } = await api.get<KpiComparisonResponse>(`/api/analytics/${sessionId}/comparison`, { params: filters });
+    const { data } = await api.get<KpiComparisonResponse>(
+      `/api/analytics/${sessionId}/comparison`,
+      { params: filters },
+    );
     return data;
   },
   chart: async (sessionId: string, chartId: string, filters: DashboardFilters = {}) => {
-    const { data } = await api.get<ChartData>(`/api/analytics/${sessionId}/chart/${chartId}`, { params: filters });
+    const { data } = await api.get<ChartData>(`/api/analytics/${sessionId}/chart/${chartId}`, {
+      params: filters,
+    });
     return data;
   },
   filterMetadata: async (sessionId: string) => {
@@ -211,7 +231,9 @@ export const AibiApi = {
     return data;
   },
   status: async (sessionId: string) => {
-    const { data } = await api.get<{ status: string }>(`/api/status/${sessionId}`);
+    const { data } = await api.get<{ session_id: string; status: string }>(
+      `/api/status/${sessionId}`,
+    );
     return data;
   },
   insights: async (sessionId: string) => {
@@ -234,15 +256,21 @@ export const AibiApi = {
     await api.post("/api/auth/logout", undefined, { headers: authHeaders() });
   },
   settings: async () => {
-    const { data } = await api.get<{ settings: UserSettings }>("/api/auth/settings", { headers: authHeaders() });
+    const { data } = await api.get<{ settings: UserSettings }>("/api/auth/settings", {
+      headers: authHeaders(),
+    });
     return data.settings;
   },
   updateSettings: async (settings: Partial<UserSettings>) => {
-    const { data } = await api.patch<{ settings: UserSettings }>("/api/auth/settings", settings, { headers: authHeaders() });
+    const { data } = await api.patch<{ settings: UserSettings }>("/api/auth/settings", settings, {
+      headers: authHeaders(),
+    });
     return data.settings;
   },
   notifications: async (sessionId: string) => {
-    const { data } = await api.get<{ notifications: NotificationItem[] }>(`/api/notifications/${sessionId}`);
+    const { data } = await api.get<{ notifications: NotificationItem[] }>(
+      `/api/notifications/${sessionId}`,
+    );
     return data.notifications;
   },
   markNotificationsRead: async (sessionId: string) => {
@@ -273,47 +301,49 @@ export const clearAuth = () => {
 };
 
 const authHeaders = () => {
-  const token = typeof window !== "undefined" ? window.localStorage.getItem("aibi_auth_token") : null;
+  const token =
+    typeof window !== "undefined" ? window.localStorage.getItem("aibi_auth_token") : null;
   return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
 export const normaliseUploadResponse = (raw: any): UploadResponse => {
   const summary = raw.schema_summary || {};
   const files: FileSummary[] = (summary.files || []).map((f: any) => ({
-    file_name    : f.original_filename || f.file_name || "unknown",
-    row_count    : f.row_count    || 0,
-    column_count : f.column_count || 0,
+    file_name: f.original_filename || f.file_name || "unknown",
+    row_count: f.row_count || 0,
+    column_count: f.column_count || 0,
     quality_score: f.quality?.score ?? f.quality_score ?? 0,
-    columns      : (f.columns || []).map((c: any) => ({
-      column_name  : c.column_name,
+    columns: (f.columns || []).map((c: any) => ({
+      column_name: c.column_name,
       detected_type: c.detected_type,
-      null_percent : c.null_percent  || 0,
-      unique_count : c.unique_count  || 0,
-      sample_value : c.sample_values?.[0] ?? null,
+      null_percent: c.null_percent || 0,
+      unique_count: c.unique_count || 0,
+      sample_value: c.sample_values?.[0] ?? null,
     })),
     issues: f.quality?.issues_found || [],
   }));
 
   const relationships: Relationship[] = (summary.relationships || []).map((r: any) => ({
-    from          : `${r.from_table}.${r.from_column}`,
-    to            : `${r.to_table}.${r.to_column}`,
-    confidence    : r.confidence,
-    match_percent : r.match_percent,
+    from: `${r.from_table}.${r.from_column}`,
+    to: `${r.to_table}.${r.to_column}`,
+    confidence: r.confidence,
+    match_percent: r.match_percent,
   }));
 
   return {
-    session_id    : raw.session_id,
+    session_id: raw.session_id,
+    status: raw.status || "done",
     schema_summary: {
       files,
       relationships,
-      total_rows   : raw.total_rows,
+      total_rows: raw.total_rows,
       tables_loaded: raw.tables_loaded,
     },
   };
 };
 
 export const normaliseAnalyticsResponse = (raw: any): AnalyticsResponse => ({
-  kpis  : raw.kpis  || [],
+  kpis: raw.kpis || [],
   charts: (raw.charts || []).map((c: any) => ({
     ...c,
     chart_id: String(c.chart_id),
