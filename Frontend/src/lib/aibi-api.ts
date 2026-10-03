@@ -1,11 +1,21 @@
 import axios from "axios";
 
 export const API_BASE =
-  (typeof window !== "undefined" && (window as any).__AIBI_API__) || "http://127.0.0.1:8000";
+  (typeof window !== "undefined" && (window as any).__AIBI_API__) ||
+  import.meta.env.VITE_API_BASE_URL ||
+  "http://127.0.0.1:8000";
 
 export const api = axios.create({
   baseURL: API_BASE,
   timeout: 300_000,
+});
+
+api.interceptors.request.use((config) => {
+  if (typeof window !== "undefined") {
+    const token = window.localStorage.getItem("aibi_auth_token");
+    if (token) config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
 });
 
 export type DetectedType =

@@ -81,14 +81,17 @@ def _normalise_email(email: str) -> str:
 
 
 def auth_enabled() -> bool:
-    """Return True when auth is explicitly required for the active environment."""
+    """Require authentication in hosted environments; allow local dev opt-in/out."""
+    env = os.getenv("APP_ENV", "development").strip().lower()
+    if env in {"production", "prod", "staging", "stage"}:
+        return True
+
     explicit = os.getenv("REQUIRE_AUTH", "").strip().lower()
     if explicit in {"1", "true", "yes", "on"}:
         return True
     if explicit in {"0", "false", "no", "off"}:
         return False
-    env = os.getenv("APP_ENV", "development").strip().lower()
-    return env in {"production", "prod", "staging", "stage"}
+    return False
 
 
 def require_auth(authorization: str | None) -> dict | None:
