@@ -128,6 +128,25 @@ export interface ChartData {
   values?: number[];
   z?: number[][];
   name?: string;
+  group?: string[];
+  parents?: string[];
+}
+
+export interface SharedChart {
+  chart_id: number;
+  chart_type: string;
+  title: string;
+  rationale?: string | null;
+  data: ChartData;
+}
+
+export interface SharedDashboardResponse {
+  session_id: string;
+  dashboard_name: string;
+  read_only: true;
+  kpis: Array<{ name: string; value: number | string; unit?: string }>;
+  charts: SharedChart[];
+  insights: string[];
 }
 
 export interface InsightsResponse {
@@ -139,6 +158,11 @@ export interface InsightsResponse {
   }>;
 }
 
+export interface ExecutiveSummaryResponse {
+  session_id: string;
+  summary: string;
+}
+
 export interface AuthResponse {
   access_token: string;
   token_type: string;
@@ -147,10 +171,64 @@ export interface AuthResponse {
 
 export interface UserSettings {
   full_name: string;
-  email_updates: boolean;
-  compact_mode: boolean;
   show_insights: boolean;
-  timezone: string;
+  show_executive_summary: boolean;
+  default_date_range: "all" | "30d" | "90d" | "12m";
+  number_format: "compact" | "full";
+}
+
+export interface UserProfile {
+  user_id: number;
+  full_name: string;
+  email: string;
+  created_at: string | null;
+}
+
+export interface SessionListItem {
+  session_id: string;
+  name: string;
+  status: string;
+  total_files: number;
+  total_rows: number;
+  created_at: string | null;
+  file_count: number;
+}
+
+export interface SchemaColumn {
+  column_name: string;
+  detected_type: string;
+  null_count: number;
+  null_percent: number;
+  unique_count: number;
+  sample_values: unknown[];
+}
+
+export interface SchemaTable {
+  table_name: string;
+  columns: SchemaColumn[];
+  quality?: {
+    score: number;
+    total_rows: number;
+    duplicate_rows: number;
+    columns_with_nulls: number;
+    outlier_columns: number;
+    issues_found: string[];
+    actions_taken: string[];
+  };
+}
+
+export interface SchemaResponse {
+  session_id: string;
+  tables: SchemaTable[];
+  relationships: Array<{
+    from_table: string;
+    from_column: string;
+    to_table: string;
+    to_column: string;
+    confidence: string;
+    match_percent: number;
+    view_name?: string | null;
+  }>;
 }
 
 export interface NotificationItem {
@@ -231,13 +309,47 @@ export const AibiApi = {
     return data;
   },
   status: async (sessionId: string) => {
-    const { data } = await api.get<{ session_id: string; status: string }>(
+    const { data } = await api.get<{ session_id: string; status: UploadResponse["status"] }>(
       `/api/status/${sessionId}`,
     );
     return data;
   },
+  schema: async (sessionId: string) => {
+    const { data } = await api.get<SchemaResponse>(`/api/schema/${sessionId}`);
+    return data;
+  },
   insights: async (sessionId: string) => {
     const { data } = await api.get<InsightsResponse>(`/api/analytics/${sessionId}/insights`);
+    return data;
+  },
+  executiveSummary: async (sessionId: string) => {
+    const { data } = await api.get<ExecutiveSummaryResponse>(
+      `/api/analytics/${sessionId}/executive-summary`,
+    );
+    return data;
+  },
+  createShareLink: async (sessionId: string) => {
+    const { data } = await api.post<{ token: string; expires_at: string }>(
+      `/api/analytics/${sessionId}/share`,
+      undefined,
+      { headers: authHeaders() },
+    );
+    return data;
+  },
+  sharedDashboard: async (token: string) => {
+    const { data } = await api.get<SharedDashboardResponse>(`/api/shared/${token}`);
+    return data;
+  },
+  scheduleReport: async (
+    sessionId: string,
+    recipientEmail: string,
+    frequency: "daily" | "weekly" | "monthly",
+  ) => {
+    const { data } = await api.post(
+      `/api/report-schedules`,
+      { session_id: sessionId, recipient_email: recipientEmail, frequency },
+      { headers: authHeaders() },
+    );
     return data;
   },
   signup: async (fullName: string, email: string, password: string) => {
@@ -251,6 +363,12 @@ export const AibiApi = {
   signin: async (email: string, password: string) => {
     const { data } = await api.post<AuthResponse>("/api/auth/signin", { email, password });
     return data;
+  },
+  profile: async () => {
+    const { data } = await api.get<{ user: UserProfile }>("/api/auth/me", {
+      headers: authHeaders(),
+    });
+    return data.user;
   },
   logout: async () => {
     await api.post("/api/auth/logout", undefined, { headers: authHeaders() });
@@ -277,7 +395,15 @@ export const AibiApi = {
     await api.post(`/api/notifications/${sessionId}/read`);
   },
   sessions: async () => {
-    const { data } = await api.get("/api/sessions");
+    const { data } = await api.get<{ sessions: SessionListItem[] }>("/api/sessions");
+    return data.sessions;
+  },
+  renameSession: async (sessionId: string, name: string) => {
+    const { data } = await api.patch<{ session_id: string; name: string }>(
+      `/api/sessions/${sessionId}`,
+      { name },
+      { headers: authHeaders() },
+    );
     return data;
   },
 };

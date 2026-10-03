@@ -11,6 +11,7 @@ save any Python file. Only use this during development.
 """
 
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -22,7 +23,8 @@ from api.database import test_connection
 from api.metrics import MetricsMiddleware, metrics_response
 from api.observability import RequestLoggingMiddleware
 from api.rate_limit import RateLimitMiddleware
-from api.routes import upload, schema, analytics, kpis, chat, auth, notifications, reports, comparisons, ml
+from api.routes import upload, schema, analytics, kpis, chat, auth, notifications, reports, comparisons, ml, workspace
+from api.routes.workspace import schedule_worker
 
 logging.basicConfig(
     level  = logging.INFO,
@@ -39,7 +41,11 @@ async def lifespan(application: FastAPI):
         logger.info("PostgreSQL connection successful.")
     else:
         logger.error("PostgreSQL connection FAILED. Check your .env file.")
-    yield
+    worker = asyncio.create_task(schedule_worker())
+    try:
+        yield
+    finally:
+        worker.cancel()
 
 
 app = FastAPI(
@@ -72,6 +78,7 @@ app.include_router(auth.router,     prefix="/api", tags=["Authentication"])
 app.include_router(notifications.router, prefix="/api", tags=["Notifications"])
 app.include_router(reports.router, prefix="/api", tags=["Reports"])
 app.include_router(ml.router, prefix="/api", tags=["Machine Learning"])
+app.include_router(workspace.router, prefix="/api", tags=["Workspace"])
 
 
 @app.get("/", tags=["Health"])

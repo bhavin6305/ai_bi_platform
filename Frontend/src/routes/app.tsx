@@ -16,6 +16,8 @@ import {
   Save,
   Loader2,
   ArrowRight,
+  ScanSearch,
+  UserRound,
 } from "lucide-react";
 import { Logo } from "@/components/aibi/atmosphere";
 import { History } from "lucide-react";
@@ -34,13 +36,15 @@ export const Route = createFileRoute("/app")({
 const nav: { to: string; label: string; icon: typeof Upload; live?: boolean }[] = [
   { to: "/app/upload", label: "Upload Data", icon: Upload },
   { to: "/app/dashboard", label: "Dashboard", icon: BarChart3, live: true },
+  { to: "/app/xray", label: "Data X-Ray", icon: ScanSearch },
   { to: "/app/chat", label: "AI Chat", icon: MessageSquareText },
   { to: "/info", label: "About", icon: Info },
   // In sidebar nav items, add:
   { to: "/app/sessions", icon: History, label: "History" },
+  { to: "/app/profile", icon: UserRound, label: "Profile" },
 ];
 
-type AppPath = "/app/upload" | "/app/dashboard" | "/app/chat" | "/app/sessions";
+type AppPath = "/app/upload" | "/app/dashboard" | "/app/xray" | "/app/chat" | "/app/sessions" | "/app/profile";
 
 function AppShell() {
   const pathname = useRouterState({ select: (s) => s.location.pathname });
@@ -65,6 +69,14 @@ function AppShell() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    AibiApi.settings().then((settings) => {
+      if (mounted) setUserSettings(settings);
+    }).catch(() => {});
+    return () => { mounted = false; };
   }, []);
 
   useEffect(() => {
@@ -244,15 +256,15 @@ function AppShell() {
               />
             )}
           </div>
-          <div
-            className="h-8 w-8 rounded-full grid place-items-center text-xs font-semibold text-white"
-            style={{
-              background: "linear-gradient(135deg,#7c3aed,#2563eb)",
-              boxShadow: "0 0 16px -4px rgba(124,58,237,0.6)",
-            }}
+          <Link
+            to="/app/profile"
+            aria-label="Open profile"
+            title="Profile"
+            className="grid h-8 w-8 place-items-center rounded-full text-xs font-semibold text-white"
+            style={{ background: "linear-gradient(135deg,#7c3aed,#2563eb)", boxShadow: "0 0 16px -4px rgba(124,58,237,0.6)" }}
           >
             {userSettings?.full_name?.trim()?.[0]?.toUpperCase() ?? "B"}
-          </div>
+          </Link>
         </header>
 
         <main className="flex-1 min-w-0">
@@ -294,6 +306,12 @@ function CommandPalette({
       icon: BarChart3,
     },
     {
+      label: "Inspect dataset",
+      hint: "Explore fields, quality, and relationships",
+      to: "/app/xray",
+      icon: ScanSearch,
+    },
+    {
       label: "Ask AI",
       hint: "Explore your data in plain English",
       to: "/app/chat",
@@ -304,6 +322,12 @@ function CommandPalette({
       hint: "Return to a previous session",
       to: "/app/sessions",
       icon: History,
+    },
+    {
+      label: "Open profile",
+      hint: "View your account and workspace activity",
+      to: "/app/profile",
+      icon: UserRound,
     },
   ] as const;
   const filtered = commands.filter((command) =>
@@ -516,16 +540,10 @@ function SettingsModal({
               <h3 className="text-[11px] uppercase tracking-widest text-white/40">Workspace</h3>
               <div className="mt-3 space-y-2">
                 <SettingToggle
-                  label="Email updates"
-                  description="Receive important pipeline and account updates."
-                  checked={settings.email_updates}
-                  onChange={(checked) => update({ email_updates: checked })}
-                />
-                <SettingToggle
-                  label="Compact dashboard"
-                  description="Fit more KPI cards and charts on each screen."
-                  checked={settings.compact_mode}
-                  onChange={(checked) => update({ compact_mode: checked })}
+                  label="Show executive brief"
+                  description="Generate a plain-language overview above dashboard KPIs."
+                  checked={settings.show_executive_summary}
+                  onChange={(checked) => update({ show_executive_summary: checked })}
                 />
                 <SettingToggle
                   label="Show AI explanations"
@@ -536,30 +554,29 @@ function SettingsModal({
               </div>
             </div>
             <div>
-              <h3 className="text-[11px] uppercase tracking-widest text-white/40">
-                Regional preferences
-              </h3>
+              <h3 className="text-[11px] uppercase tracking-widest text-white/40">Dashboard defaults</h3>
               <label className="mt-3 block text-sm text-white/75">
-                Timezone
+                Default date window
                 <select
-                  value={settings.timezone}
-                  onChange={(e) => update({ timezone: e.target.value })}
+                  value={settings.default_date_range}
+                  onChange={(event) => update({ default_date_range: event.target.value as UserSettings["default_date_range"] })}
                   className="mt-1.5 w-full rounded-lg bg-white/10 px-3 py-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-violet-500/50"
                 >
-                  {[
-                    "UTC",
-                    "America/New_York",
-                    "America/Los_Angeles",
-                    "Europe/London",
-                    "Europe/Paris",
-                    "Asia/Kolkata",
-                    "Asia/Singapore",
-                    "Australia/Sydney",
-                  ].map((timezone) => (
-                    <option key={timezone} value={timezone}>
-                      {timezone}
-                    </option>
-                  ))}
+                  <option value="all">All available dates</option>
+                  <option value="30d">Last 30 days</option>
+                  <option value="90d">Last 90 days</option>
+                  <option value="12m">Last 12 months</option>
+                </select>
+              </label>
+              <label className="mt-4 block text-sm text-white/75">
+                KPI number display
+                <select
+                  value={settings.number_format}
+                  onChange={(event) => update({ number_format: event.target.value as UserSettings["number_format"] })}
+                  className="mt-1.5 w-full rounded-lg bg-white/10 px-3 py-2.5 text-sm text-white outline-none focus:ring-2 focus:ring-violet-500/50"
+                >
+                  <option value="compact">Compact (1.2K)</option>
+                  <option value="full">Exact (1,234)</option>
                 </select>
               </label>
             </div>

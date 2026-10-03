@@ -9,6 +9,7 @@ import logging
 from datetime import date
 
 from fastapi import APIRouter, Header, HTTPException, Query
+from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from api.database import get_engine
@@ -19,6 +20,17 @@ from analytics.kpi_engine import calculate_kpis
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+class SessionRename(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+
+
+def _ensure_session_name_column(engine) -> None:
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS session_name VARCHAR(120)"
+        ))
 
 
 @router.get("/analytics/{session_id}")
@@ -120,16 +132,17 @@ def list_sessions(authorization: str | None = Header(default=None)):
         require_auth(authorization)
 
     engine = get_engine()
+    _ensure_session_name_column(engine)
 
     with engine.connect() as conn:
         rows = conn.execute(
             text("""
-                SELECT s.session_id, s.status, s.total_files,
+                  SELECT s.session_id, s.session_name, s.status, s.total_files,
                        s.total_rows, s.created_at,
                        COUNT(DISTINCT f.file_id) as file_count
                 FROM upload_sessions s
                 LEFT JOIN uploaded_files f ON s.session_id = f.session_id
-                GROUP BY s.session_id, s.status, s.total_files,
+                GROUP BY s.session_id, s.session_name, s.status, s.total_files,
                          s.total_rows, s.created_at
                 ORDER BY s.created_at DESC
                 LIMIT 50
@@ -140,15 +153,39 @@ def list_sessions(authorization: str | None = Header(default=None)):
         "sessions": [
             {
                 "session_id" : r[0],
-                "status"     : r[1],
-                "total_files": r[2],
-                "total_rows" : r[3],
-                "created_at" : str(r[4]) if r[4] else None,
-                "file_count" : r[5],
+                "name"       : r[1] or f"Dataset {r[0][:8]}",
+                "status"     : r[2],
+                "total_files": r[3],
+                "total_rows" : r[4],
+                "created_at" : str(r[5]) if r[5] else None,
+                "file_count" : r[6],
             }
             for r in rows
         ]
     }
+
+
+@router.patch("/sessions/{session_id}")
+def rename_session(
+    session_id: str,
+    payload: SessionRename,
+    authorization: str | None = Header(default=None),
+):
+    if auth_enabled():
+        require_auth(authorization)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Session name cannot be empty.")
+    engine = get_engine()
+    _ensure_session_name_column(engine)
+    with engine.begin() as conn:
+        updated = conn.execute(
+            text("UPDATE upload_sessions SET session_name = :name WHERE session_id = :session_id RETURNING session_id"),
+            {"name": name, "session_id": session_id},
+        ).first()
+    if not updated:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return {"session_id": session_id, "name": name}
 @router.get("/analytics/{session_id}/chart/{chart_id}")
 def get_chart_data(
     session_id: str,

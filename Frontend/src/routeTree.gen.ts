@@ -15,8 +15,11 @@ import { Route as InfoRouteImport } from './routes/info'
 import { Route as AppRouteImport } from './routes/app'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as AppIndexRouteImport } from './routes/app.index'
+import { Route as SharedTokenRouteImport } from './routes/shared.$token'
+import { Route as AppXrayRouteImport } from './routes/app.xray'
 import { Route as AppUploadRouteImport } from './routes/app.upload'
 import { Route as AppSessionsRouteImport } from './routes/app.sessions'
+import { Route as AppProfileRouteImport } from './routes/app.profile'
 import { Route as AppDashboardRouteImport } from './routes/app.dashboard'
 import { Route as AppChatRouteImport } from './routes/app.chat'
 
@@ -50,6 +53,16 @@ const AppIndexRoute = AppIndexRouteImport.update({
   path: '/',
   getParentRoute: () => AppRoute,
 } as any)
+const SharedTokenRoute = SharedTokenRouteImport.update({
+  id: '/shared/$token',
+  path: '/shared/$token',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppXrayRoute = AppXrayRouteImport.update({
+  id: '/xray',
+  path: '/xray',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppUploadRoute = AppUploadRouteImport.update({
   id: '/upload',
   path: '/upload',
@@ -58,6 +71,11 @@ const AppUploadRoute = AppUploadRouteImport.update({
 const AppSessionsRoute = AppSessionsRouteImport.update({
   id: '/sessions',
   path: '/sessions',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppProfileRoute = AppProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
   getParentRoute: () => AppRoute,
 } as any)
 const AppDashboardRoute = AppDashboardRouteImport.update({
@@ -79,8 +97,11 @@ export interface FileRoutesByFullPath {
   '/sign-up': typeof SignUpRoute
   '/app/chat': typeof AppChatRoute
   '/app/dashboard': typeof AppDashboardRoute
+  '/app/profile': typeof AppProfileRoute
   '/app/sessions': typeof AppSessionsRoute
   '/app/upload': typeof AppUploadRoute
+  '/app/xray': typeof AppXrayRoute
+  '/shared/$token': typeof SharedTokenRoute
   '/app/': typeof AppIndexRoute
 }
 export interface FileRoutesByTo {
@@ -90,8 +111,11 @@ export interface FileRoutesByTo {
   '/sign-up': typeof SignUpRoute
   '/app/chat': typeof AppChatRoute
   '/app/dashboard': typeof AppDashboardRoute
+  '/app/profile': typeof AppProfileRoute
   '/app/sessions': typeof AppSessionsRoute
   '/app/upload': typeof AppUploadRoute
+  '/app/xray': typeof AppXrayRoute
+  '/shared/$token': typeof SharedTokenRoute
   '/app': typeof AppIndexRoute
 }
 export interface FileRoutesById {
@@ -103,8 +127,11 @@ export interface FileRoutesById {
   '/sign-up': typeof SignUpRoute
   '/app/chat': typeof AppChatRoute
   '/app/dashboard': typeof AppDashboardRoute
+  '/app/profile': typeof AppProfileRoute
   '/app/sessions': typeof AppSessionsRoute
   '/app/upload': typeof AppUploadRoute
+  '/app/xray': typeof AppXrayRoute
+  '/shared/$token': typeof SharedTokenRoute
   '/app/': typeof AppIndexRoute
 }
 export interface FileRouteTypes {
@@ -117,8 +144,11 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/app/chat'
     | '/app/dashboard'
+    | '/app/profile'
     | '/app/sessions'
     | '/app/upload'
+    | '/app/xray'
+    | '/shared/$token'
     | '/app/'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -128,8 +158,11 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/app/chat'
     | '/app/dashboard'
+    | '/app/profile'
     | '/app/sessions'
     | '/app/upload'
+    | '/app/xray'
+    | '/shared/$token'
     | '/app'
   id:
     | '__root__'
@@ -140,8 +173,11 @@ export interface FileRouteTypes {
     | '/sign-up'
     | '/app/chat'
     | '/app/dashboard'
+    | '/app/profile'
     | '/app/sessions'
     | '/app/upload'
+    | '/app/xray'
+    | '/shared/$token'
     | '/app/'
   fileRoutesById: FileRoutesById
 }
@@ -151,6 +187,7 @@ export interface RootRouteChildren {
   InfoRoute: typeof InfoRoute
   SignInRoute: typeof SignInRoute
   SignUpRoute: typeof SignUpRoute
+  SharedTokenRoute: typeof SharedTokenRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -197,6 +234,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/shared/$token': {
+      id: '/shared/$token'
+      path: '/shared/$token'
+      fullPath: '/shared/$token'
+      preLoaderRoute: typeof SharedTokenRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/app/xray': {
+      id: '/app/xray'
+      path: '/xray'
+      fullPath: '/app/xray'
+      preLoaderRoute: typeof AppXrayRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/app/upload': {
       id: '/app/upload'
       path: '/upload'
@@ -209,6 +260,13 @@ declare module '@tanstack/react-router' {
       path: '/sessions'
       fullPath: '/app/sessions'
       preLoaderRoute: typeof AppSessionsRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/app/profile': {
+      id: '/app/profile'
+      path: '/profile'
+      fullPath: '/app/profile'
+      preLoaderRoute: typeof AppProfileRouteImport
       parentRoute: typeof AppRoute
     }
     '/app/dashboard': {
@@ -231,16 +289,20 @@ declare module '@tanstack/react-router' {
 interface AppRouteChildren {
   AppChatRoute: typeof AppChatRoute
   AppDashboardRoute: typeof AppDashboardRoute
+  AppProfileRoute: typeof AppProfileRoute
   AppSessionsRoute: typeof AppSessionsRoute
   AppUploadRoute: typeof AppUploadRoute
+  AppXrayRoute: typeof AppXrayRoute
   AppIndexRoute: typeof AppIndexRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
   AppChatRoute: AppChatRoute,
   AppDashboardRoute: AppDashboardRoute,
+  AppProfileRoute: AppProfileRoute,
   AppSessionsRoute: AppSessionsRoute,
   AppUploadRoute: AppUploadRoute,
+  AppXrayRoute: AppXrayRoute,
   AppIndexRoute: AppIndexRoute,
 }
 
@@ -252,6 +314,7 @@ const rootRouteChildren: RootRouteChildren = {
   InfoRoute: InfoRoute,
   SignInRoute: SignInRoute,
   SignUpRoute: SignUpRoute,
+  SharedTokenRoute: SharedTokenRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

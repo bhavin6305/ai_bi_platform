@@ -6,7 +6,6 @@ import os
 import re
 import secrets
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
@@ -33,18 +32,18 @@ class SignInRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     full_name: str | None = Field(default=None, min_length=1, max_length=120)
-    email_updates: bool | None = None
-    compact_mode: bool | None = None
     show_insights: bool | None = None
-    timezone: str | None = Field(default=None, max_length=80)
+    show_executive_summary: bool | None = None
+    default_date_range: str | None = Field(default=None, pattern="^(all|30d|90d|12m)$")
+    number_format: str | None = Field(default=None, pattern="^(compact|full)$")
 
 
 DEFAULT_SETTINGS = {
     "full_name": "Local User",
-    "email_updates": True,
-    "compact_mode": False,
     "show_insights": True,
-    "timezone": "UTC",
+    "show_executive_summary": True,
+    "default_date_range": "all",
+    "number_format": "compact",
 }
 
 
@@ -63,7 +62,10 @@ def _ensure_auth_tables() -> None:
         conn.execute(text("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS email_updates BOOLEAN NOT NULL DEFAULT TRUE"))
         conn.execute(text("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS compact_mode BOOLEAN NOT NULL DEFAULT FALSE"))
         conn.execute(text("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS show_insights BOOLEAN NOT NULL DEFAULT TRUE"))
+        conn.execute(text("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS show_executive_summary BOOLEAN NOT NULL DEFAULT TRUE"))
         conn.execute(text("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS timezone VARCHAR(80) NOT NULL DEFAULT 'UTC'"))
+        conn.execute(text("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS default_date_range VARCHAR(8) NOT NULL DEFAULT 'all'"))
+        conn.execute(text("ALTER TABLE app_users ADD COLUMN IF NOT EXISTS number_format VARCHAR(8) NOT NULL DEFAULT 'compact'"))
         conn.execute(text("""
             CREATE TABLE IF NOT EXISTS auth_sessions (
                 session_id VARCHAR(64) PRIMARY KEY,
@@ -94,19 +96,24 @@ def require_auth(authorization: str | None) -> dict | None:
     if not auth_enabled():
         return None
     token = _token_from_header(authorization)
+    user = _get_session_user(token)
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
+    return user
+
+
+def _get_session_user(token: str) -> dict | None:
     _ensure_auth_tables()
     with get_engine().connect() as conn:
         user = conn.execute(
             text("""
-                SELECT u.user_id, u.full_name, u.email
+                SELECT u.user_id, u.full_name, u.email, u.created_at
                 FROM auth_sessions s JOIN app_users u ON u.user_id = s.user_id
                 WHERE s.session_id = :token AND s.expires_at > NOW()
             """),
             {"token": token},
         ).mappings().fetchone()
-    if not user:
-        raise HTTPException(status_code=401, detail="Invalid or expired session.")
-    return dict(user)
+    return dict(user) if user else None
 
 
 def _hash_password(password: str, salt: bytes) -> str:
@@ -199,9 +206,11 @@ def signin(payload: SignInRequest):
 
 @router.get("/me")
 def current_user(authorization: str | None = Header(default=None)):
-    user = require_auth(authorization)
-    if user is None:
+    if not authorization:
         raise HTTPException(status_code=401, detail="Authentication required.")
+    user = _get_session_user(_token_from_header(authorization))
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid or expired session.")
     return {"user": user}
 
 
@@ -223,16 +232,17 @@ def logout(authorization: str | None = Header(default=None)):
 
 @router.get("/settings")
 def get_settings(authorization: str | None = Header(default=None)):
-    user = require_auth(authorization)
-    if user is None:
+    if auth_enabled():
+        require_auth(authorization)
+    if not authorization:
         return {"settings": DEFAULT_SETTINGS.copy()}
     token = _token_from_header(authorization)
     _ensure_auth_tables()
     with get_engine().connect() as conn:
         settings = conn.execute(
             text("""
-                  SELECT u.full_name, u.email_updates, u.compact_mode,
-                      u.show_insights, u.timezone
+                  SELECT u.full_name, u.show_insights, u.show_executive_summary,
+                      u.default_date_range, u.number_format
                 FROM auth_sessions s JOIN app_users u ON u.user_id = s.user_id
                 WHERE s.session_id = :token AND s.expires_at > NOW()
             """),
@@ -257,15 +267,10 @@ def update_settings(payload: SettingsUpdate, authorization: str | None = Header(
         updates["full_name"] = updates["full_name"].strip()
         if not updates["full_name"]:
             raise HTTPException(status_code=400, detail="Display name cannot be empty.")
-    if "timezone" in updates:
-        try:
-            ZoneInfo(updates["timezone"])
-        except ZoneInfoNotFoundError:
-            raise HTTPException(status_code=400, detail="Invalid timezone.")
     if not updates:
         return get_settings(authorization)
 
-    allowed_columns = {"full_name", "email_updates", "compact_mode", "show_insights", "timezone"}
+    allowed_columns = {"full_name", "show_insights", "show_executive_summary", "default_date_range", "number_format"}
     assignments = ", ".join(f'"{column}" = :{column}' for column in updates if column in allowed_columns)
     values = {**updates, "token": token}
     with get_engine().begin() as conn:
