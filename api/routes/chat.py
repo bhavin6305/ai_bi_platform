@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 from api.database import get_engine
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import auth_enabled, ensure_session_access, require_auth
 from ai.sql_generator  import generate_sql, execute_sql
 from ai.chat_assistant import explain_results, suggest_followup_questions
 
@@ -47,6 +47,8 @@ def chat(request: ChatRequest, authorization: str | None = Header(default=None))
         raise HTTPException(status_code=400, detail="session_id is required.")
     if not request.question.strip():
         raise HTTPException(status_code=400, detail="question cannot be empty.")
+
+    ensure_session_access(request.session_id, authorization)
 
     engine = get_engine()
 
@@ -105,8 +107,7 @@ def chat(request: ChatRequest, authorization: str | None = Header(default=None))
 @router.get("/chat/{session_id}/history")
 def chat_history(session_id: str, authorization: str | None = Header(default=None)):
     """Return saved chat responses for one uploaded dataset session."""
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
 
     if not session_id:
         raise HTTPException(status_code=400, detail="session_id is required.")

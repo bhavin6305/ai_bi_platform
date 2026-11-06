@@ -33,6 +33,8 @@ The platform is designed to help users:
 - chart recommendation and chart configuration generation
 - dashboard filter support by date and category
 - chart data generation for frontend rendering
+- explainable business alerts for material period-over-period KPI changes, with session alert history
+- assumption-based what-if scenarios for price, order volume, and available delivery-rate KPIs
 
 ### AI and natural-language analytics
 - Groq-based SQL generation from business questions
@@ -49,6 +51,16 @@ The platform is designed to help users:
 - PDF report generation for session analytics
 - notification persistence for pipeline and anomaly events
 - read/unread notification tracking
+
+The Business Health Monitor compares the latest 30 days with the preceding 30 days
+when at least 60 days of dated data are available. A selected dashboard date range
+is compared with the immediately preceding range of equal length. Revenue changes
+of 20% or more, other KPI changes of 25% or more, and rate changes of 10 percentage
+points or more are surfaced as alerts. Priority rises at 1.5x and 2x those thresholds.
+Threshold alerts are evaluated after upload processing and when the dashboard is
+refreshed. What-if results are mathematical estimates based on the displayed KPI
+baseline, not guaranteed forecasts.
+Saved scenarios are stored in the current browser for later comparison.
 
 ### Authentication and production safety
 - signup and signin endpoints

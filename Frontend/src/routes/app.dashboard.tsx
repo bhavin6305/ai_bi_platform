@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { lazy, Suspense, useEffect, useState } from "react";
 import {
@@ -12,6 +12,10 @@ import {
   ArrowRight,
   Upload,
   Share2,
+  Activity,
+  AlertTriangle,
+  ArrowDownRight,
+  ArrowUpRight,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -21,6 +25,7 @@ import {
   type DashboardFilters,
   type FilterField,
   type Kpi,
+  type BusinessAlertHistoryItem,
 } from "@/lib/aibi-api";
 
 const Plot = lazy(() => import("react-plotly.js"));
@@ -115,6 +120,13 @@ function Dashboard() {
       !!sessionId &&
       Boolean(appliedFilters.date_column && appliedFilters.date_from && appliedFilters.date_to),
     retry: 1,
+  });
+  const alertsQuery = useQuery({
+    queryKey: ["business-alerts", sessionId, appliedFilters],
+    queryFn: () => AibiApi.evaluateBusinessAlerts(sessionId!, appliedFilters),
+    enabled: !!sessionId,
+    retry: 1,
+    staleTime: 60_000,
   });
   const insightsQuery = useQuery({
     queryKey: ["insights", sessionId],
@@ -267,6 +279,19 @@ function Dashboard() {
         </motion.section>
       )}
 
+      <BusinessHealthMonitor
+        alerts={alertsQuery.data?.alerts ?? []}
+        history={alertsQuery.data?.history ?? []}
+        period={alertsQuery.data?.period}
+        comparisonAvailable={alertsQuery.data?.comparison_available ?? false}
+        isLoading={alertsQuery.isLoading}
+        isError={alertsQuery.isError}
+        errorMessage={alertsQuery.error instanceof Error ? alertsQuery.error.message : undefined}
+        onRetry={() => void alertsQuery.refetch()}
+      />
+
+      <WhatIfSimulator sessionId={sessionId} filters={appliedFilters} kpis={data.kpis ?? []} />
+
       {data.kpis?.length > 0 && (
         <div className="mt-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {data.kpis.slice(0, 8).map((k, i) => (
@@ -356,6 +381,425 @@ function KpiCard({
       </div>
     </motion.div>
   );
+}
+
+function BusinessHealthMonitor({
+  alerts,
+  history,
+  period,
+  comparisonAvailable,
+  isLoading,
+  isError,
+  errorMessage,
+  onRetry,
+}: {
+  alerts: Array<{
+    severity: "low" | "medium" | "high";
+    title: string;
+    message: string;
+    recommendation: string;
+    related_movements: Array<{
+      kpi_name: string;
+      direction: "up" | "down" | "flat";
+      absolute_change: number;
+      percent_change: number | null;
+      unit: string;
+    }>;
+  }>;
+  history: BusinessAlertHistoryItem[];
+  period?: { date_from: string | null; date_to: string | null };
+  comparisonAvailable: boolean;
+  isLoading: boolean;
+  isError: boolean;
+  errorMessage?: string;
+  onRetry: () => void;
+}) {
+  const severityStyles = {
+    high: { color: "#fca5a5", border: "rgba(248,113,113,0.28)", background: "rgba(127,29,29,0.15)" },
+    medium: { color: "#fcd34d", border: "rgba(251,191,36,0.24)", background: "rgba(120,53,15,0.13)" },
+    low: { color: "#93c5fd", border: "rgba(96,165,250,0.24)", background: "rgba(30,58,138,0.13)" },
+  };
+
+  return (
+    <section
+      className="mt-6 rounded-2xl p-5"
+      style={{ background: "rgba(13,13,24,0.9)", border: "1px solid rgba(255,255,255,0.08)" }}
+      aria-labelledby="business-health-heading"
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3">
+          <Activity className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" />
+          <div>
+            <h2 id="business-health-heading" className="text-sm font-semibold text-white">
+              Business Health Monitor
+            </h2>
+            <p className="mt-1 text-xs text-white/45">
+              Explainable KPI threshold checks
+              {period?.date_from && period.date_to
+                ? ` · ${period.date_from} to ${period.date_to} vs previous period`
+                : ""}
+            </p>
+          </div>
+        </div>
+        {isLoading && (
+          <div className="flex items-center gap-2 text-xs text-white/45" role="status">
+            <Loader2 className="h-4 w-4 animate-spin" />
+            Checking KPI periods…
+          </div>
+        )}
+      </div>
+
+      {isError ? (
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm text-rose-200">
+          <span>
+            Business alerts could not be loaded
+            {errorMessage ? `: ${errorMessage}` : "."}
+          </span>
+          <button type="button" onClick={onRetry} className="rounded-lg bg-white/10 px-3 py-1.5 text-xs">
+            Retry
+          </button>
+        </div>
+      ) : (
+        <>
+          {!isLoading && alerts.length === 0 && (
+            <div className="mt-4 flex items-center gap-2 text-sm text-white/55">
+              <Check className="h-4 w-4 text-emerald-300" />
+              {comparisonAvailable
+                ? "No KPI changes crossed the alert thresholds for this period."
+                : "Select a date range, or upload at least 60 days of dated data to compare periods."}
+            </div>
+          )}
+
+          {alerts.length > 0 && (
+            <div className="mt-4 grid gap-3 md:grid-cols-2">
+              {alerts.map((alert) => {
+                const style = severityStyles[alert.severity];
+                const DirectionIcon = alert.title.includes("increased") ? ArrowUpRight : ArrowDownRight;
+                return (
+                  <article
+                    key={`${alert.severity}-${alert.title}`}
+                    className="rounded-xl p-4"
+                    style={{ color: style.color, border: `1px solid ${style.border}`, background: style.background }}
+                  >
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                      <div>
+                        <div className="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-widest">
+                          <span>{alert.severity} priority</span>
+                          <DirectionIcon className="h-3.5 w-3.5" />
+                        </div>
+                        <h3 className="mt-1 text-sm font-semibold">{alert.title}</h3>
+                        <p className="mt-1 text-xs leading-5 text-white/65">{alert.message}</p>
+                        {alert.related_movements.length > 0 && (
+                          <p className="mt-2 text-xs leading-5 text-white/55">
+                            Related movements (not proven causes):{" "}
+                            {alert.related_movements
+                              .map((movement) => {
+                                const magnitude =
+                                  movement.unit === "percentage points"
+                                    ? Math.abs(movement.absolute_change).toFixed(1)
+                                    : `${Math.abs(movement.percent_change ?? 0).toFixed(1)}%`;
+                                return `${movement.kpi_name} ${movement.direction} ${magnitude}${movement.unit === "percentage points" ? " percentage points" : ""}`;
+                              })
+                              .join("; ")}
+                          </p>
+                        )}
+                        <p className="mt-2 text-xs leading-5 text-white/50">
+                          Suggested check: {alert.recommendation}
+                        </p>
+                      </div>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
+
+          {history.length > 0 && (
+            <details className="mt-4 border-t border-white/[0.07] pt-3">
+              <summary className="cursor-pointer text-xs text-white/55">
+                Alert history ({history.length})
+              </summary>
+              <ul className="mt-3 space-y-2">
+                {history.slice(0, 5).map((item) => (
+                  <li key={item.id} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 text-xs">
+                    <span className="text-white/70">{item.title}</span>
+                    <span className="text-white/35">
+                      {item.created_at ? new Date(item.created_at).toLocaleString() : "Recently"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
+function WhatIfSimulator({
+  sessionId,
+  filters,
+  kpis,
+}: {
+  sessionId: string;
+  filters: DashboardFilters;
+  kpis: Kpi[];
+}) {
+  const [priceChange, setPriceChange] = useState(0);
+  const [orderVolumeChange, setOrderVolumeChange] = useState(0);
+  const [cancellationReduction, setCancellationReduction] = useState(0);
+  const [savedScenarios, setSavedScenarios] = useState<SavedScenario[]>([]);
+  const findKpi = (name: string) => kpis.find((kpi) => kpi.name.toLowerCase() === name.toLowerCase());
+  const revenueKpi = findKpi("Total Revenue");
+  const ordersKpi = findKpi("Total Orders");
+  const deliveryKpi = findKpi("Delivery Rate");
+  const deliveryRate = Number(deliveryKpi?.value);
+  const canAdjustCancellations =
+    Boolean(deliveryKpi) && Number.isFinite(deliveryRate) && deliveryRate > 0 && deliveryRate <= 100;
+  const simulation = useMutation({
+    mutationFn: (adjustments: Record<string, number>) =>
+      AibiApi.whatIf(sessionId, adjustments, filters),
+  });
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(`aibi_scenarios_${sessionId}`) ?? "[]");
+      setSavedScenarios(Array.isArray(saved) ? saved.filter(isSavedScenario) : []);
+    } catch {
+      setSavedScenarios([]);
+    }
+  }, [sessionId]);
+
+  const runScenario = () => {
+    const volumeFactor = ordersKpi ? 1 + orderVolumeChange / 100 : 1;
+    let completionFactor = 1;
+    let deliveryAdjustment = 0;
+    if (canAdjustCancellations && deliveryKpi) {
+      const currentDelivery = deliveryRate / 100;
+      const projectedDelivery =
+        1 - (1 - currentDelivery) * (1 - cancellationReduction / 100);
+      completionFactor = projectedDelivery / currentDelivery;
+      deliveryAdjustment = (completionFactor - 1) * 100;
+    }
+
+    const adjustments: Record<string, number> = {};
+    if (revenueKpi) {
+      adjustments[revenueKpi.name] =
+        toScenarioAdjustment(((1 + priceChange / 100) * volumeFactor * completionFactor - 1) * 100);
+    }
+    if (ordersKpi) {
+      adjustments[ordersKpi.name] =
+        toScenarioAdjustment((volumeFactor * completionFactor - 1) * 100);
+    }
+    if (deliveryKpi && canAdjustCancellations) {
+      adjustments[deliveryKpi.name] = toScenarioAdjustment(deliveryAdjustment);
+    }
+    simulation.mutate(adjustments);
+  };
+
+  const projected = simulation.data?.scenario ?? {};
+  const impacted = Object.entries(projected).filter(([, value]) => value.adjustment_pct !== 0);
+  const saveScenario = () => {
+    if (!simulation.data) return;
+    const saved: SavedScenario = {
+      saved_at: new Date().toISOString(),
+      assumptions: `Price ${priceChange >= 0 ? "+" : ""}${priceChange}%, orders ${orderVolumeChange >= 0 ? "+" : ""}${orderVolumeChange}%, cancellation reduction ${cancellationReduction}%`,
+      projection: impacted
+        .map(([name, value]) => `${name}: ${formatNumber(value.base_value)} -> ${formatNumber(value.projected_value)}`)
+        .join("; "),
+      summary: simulation.data.summary,
+    };
+    const next = [saved, ...savedScenarios].slice(0, 5);
+    try {
+      localStorage.setItem(`aibi_scenarios_${sessionId}`, JSON.stringify(next));
+      setSavedScenarios(next);
+      toast.success("Scenario saved in this browser.");
+    } catch {
+      toast.error("Could not save this scenario in the browser.");
+    }
+  };
+
+  return (
+    <section
+      className="mt-4 rounded-2xl p-5"
+      style={{
+        background: "linear-gradient(135deg, rgba(8,145,178,0.08), rgba(13,13,24,0.95))",
+        border: "1px solid rgba(103,232,249,0.14)",
+      }}
+      aria-labelledby="scenario-heading"
+    >
+      <div className="flex items-start gap-3">
+        <Activity className="mt-0.5 h-5 w-5 shrink-0 text-cyan-300" />
+        <div>
+          <h2 id="scenario-heading" className="text-sm font-semibold text-white">
+            What-If Business Simulator
+          </h2>
+          <p className="mt-1 text-xs text-white/45">
+            Adjust assumptions against the selected dataset and KPI period.
+          </p>
+        </div>
+      </div>
+
+      {!revenueKpi && !ordersKpi && !deliveryKpi ? (
+        <p className="mt-4 text-sm text-white/55">
+          This dataset has no supported revenue, order, or delivery-rate KPI to simulate.
+        </p>
+      ) : (
+        <>
+          <div className="mt-4 grid gap-4 md:grid-cols-3">
+            <ScenarioSlider
+              label="Price change"
+              value={priceChange}
+              min={-50}
+              max={50}
+              disabled={!revenueKpi}
+              onChange={setPriceChange}
+            />
+            <ScenarioSlider
+              label="Order volume change"
+              value={orderVolumeChange}
+              min={-50}
+              max={50}
+              disabled={!ordersKpi}
+              onChange={setOrderVolumeChange}
+            />
+            <ScenarioSlider
+              label="Cancellation reduction"
+              value={cancellationReduction}
+              min={0}
+              max={50}
+              disabled={!canAdjustCancellations}
+              onChange={setCancellationReduction}
+            />
+          </div>
+          {!canAdjustCancellations && (
+            <p className="mt-2 text-xs text-white/40">
+              Cancellation impact is available when the dataset includes a non-zero Delivery Rate KPI.
+            </p>
+          )}
+          <div className="mt-4 flex flex-wrap items-center gap-3">
+            <button
+              type="button"
+              onClick={runScenario}
+              disabled={simulation.isPending}
+              className="rounded-full bg-cyan-500/15 px-4 py-2 text-xs font-medium text-cyan-100 hover:bg-cyan-500/25 disabled:opacity-50"
+            >
+              {simulation.isPending ? "Calculating..." : "Compare scenario"}
+            </button>
+            <button
+              type="button"
+              onClick={saveScenario}
+              disabled={!simulation.data}
+              className="rounded-full border border-white/10 px-4 py-2 text-xs font-medium text-white/70 hover:bg-white/5 disabled:opacity-40"
+            >
+              Save scenario
+            </button>
+            {simulation.isError && <span className="text-xs text-rose-300">Scenario could not be calculated.</span>}
+            {simulation.data && (
+              <span className="text-xs text-white/55">{simulation.data.summary}</span>
+            )}
+          </div>
+          {impacted.length > 0 && (
+            <div className="mt-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {impacted.map(([name, value]) => {
+                const unit = findKpi(name)?.unit;
+                return (
+                  <div key={name} className="rounded-xl border border-white/[0.07] bg-black/10 p-3">
+                    <div className="text-[10px] uppercase tracking-widest text-white/40">{name}</div>
+                    <div className="mt-1 text-xs text-white/55">
+                      {formatNumber(value.base_value)}{unit ? ` ${unit}` : ""}
+                      <ArrowRight className="mx-1 inline h-3 w-3" />
+                      <span className="font-medium text-cyan-100">
+                        {formatNumber(value.projected_value)}{unit ? ` ${unit}` : ""}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {savedScenarios.length > 0 && (
+            <details className="mt-4 border-t border-white/[0.07] pt-3">
+              <summary className="cursor-pointer text-xs text-white/55">
+                Saved scenarios ({savedScenarios.length})
+              </summary>
+              <ul className="mt-3 space-y-3">
+                {savedScenarios.map((saved) => (
+                  <li key={saved.saved_at} className="text-xs">
+                    <div className="text-white/70">{saved.assumptions}</div>
+                    <div className="mt-1 text-white/45">{saved.projection || saved.summary}</div>
+                    <div className="mt-1 text-white/30">{new Date(saved.saved_at).toLocaleString()}</div>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <p className="mt-4 text-[11px] leading-5 text-white/35">
+            These are assumption-based mathematical estimates, not guaranteed predictions. Revenue applies
+            price, order-volume, and available delivery-rate assumptions together.
+          </p>
+        </>
+      )}
+    </section>
+  );
+}
+
+interface SavedScenario {
+  saved_at: string;
+  assumptions: string;
+  projection: string;
+  summary: string;
+}
+
+function isSavedScenario(value: unknown): value is SavedScenario {
+  if (!value || typeof value !== "object") return false;
+  const scenario = value as Record<string, unknown>;
+  return (
+    typeof scenario.saved_at === "string" &&
+    typeof scenario.assumptions === "string" &&
+    typeof scenario.projection === "string" &&
+    typeof scenario.summary === "string"
+  );
+}
+
+function ScenarioSlider({
+  label,
+  value,
+  min,
+  max,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  disabled: boolean;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className={`block text-xs text-white/65 ${disabled ? "opacity-40" : ""}`}>
+      <span className="flex justify-between gap-2">
+        <span>{label}</span>
+        <span className="tabular-nums text-cyan-100">{value > 0 ? "+" : ""}{value}%</span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={1}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(Number(event.target.value))}
+        className="mt-2 w-full accent-cyan-400 disabled:cursor-not-allowed"
+      />
+    </label>
+  );
+}
+
+function toScenarioAdjustment(percent: number) {
+  return Math.abs(percent) <= 1 ? percent / 100 : percent;
 }
 
 function ChartCard({

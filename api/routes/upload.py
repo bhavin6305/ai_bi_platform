@@ -22,7 +22,7 @@ from fastapi import APIRouter, File, Header, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
 
 from api.config import retry_with_backoff
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import resolve_request_user
 from etl.pipeline import run_pipeline
 from etl.job_queue import ETLJob, get_etl_queue
 from etl.loader import _upsert_upload_session
@@ -125,8 +125,7 @@ async def upload_files(
         views_created   : list of SQL VIEW names created
         schema_summary  : full schema profile (column types, quality scores, relationships)
     """
-    if auth_enabled():
-        require_auth(authorization)
+    user = resolve_request_user(authorization)
 
     try:
         validate_upload_files(files)
@@ -144,6 +143,7 @@ async def upload_files(
                 session_id=session_id,
                 status="pending",
                 total_files=len(files),
+                owner_user_id=user["user_id"] if user else None,
                 engine=engine,
             )
             get_etl_queue().enqueue(ETLJob(session_id, staged_paths))
@@ -163,7 +163,20 @@ async def upload_files(
 
         # Run the full pipeline — this is synchronous and may take 10-60 seconds
         # for large files. In production you would use a background task queue.
-        result = retry_with_backoff(run_pipeline, files=files, max_attempts=2)
+        session_id = str(uuid4())
+        _upsert_upload_session(
+            session_id=session_id,
+            status="pending",
+            total_files=len(files),
+            owner_user_id=user["user_id"] if user else None,
+            engine=get_engine(),
+        )
+        result = retry_with_backoff(
+            run_pipeline,
+            files=files,
+            session_id=session_id,
+            max_attempts=2,
+        )
 
         return JSONResponse(
             status_code = 200 if result.status == "done" else 207,

@@ -15,7 +15,7 @@ from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import text
 
 from api.database import get_engine
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import ensure_session_access
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -33,8 +33,7 @@ def get_schema(session_id: str, authorization: str | None = Header(default=None)
         tables        : list of table profiles (columns, types, quality)
         relationships : list of FK/PK relationships detected
     """
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
 
     engine = get_engine()
 
@@ -149,8 +148,7 @@ def get_status(session_id: str, authorization: str | None = Header(default=None)
         'done'       → pipeline complete
         'error'      → pipeline failed
     """
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
 
     engine = get_engine()
 

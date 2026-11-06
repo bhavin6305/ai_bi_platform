@@ -71,6 +71,7 @@ class KPIResult:
     kpi_category: str
     display_format: str
     tier: int = 2
+    confidence: float = 0.75
 
 
 def calculate_kpis(
@@ -367,11 +368,106 @@ def _calculate_kpis(
         key=lambda k: (k.tier, category_order.get(k.kpi_category, 9), k.kpi_name),
     )[:MAX_KPIS]
 
+    for kpi in final_kpis:
+        kpi.confidence = _confidence_for_kpi(kpi)
+
     if persist:
         _save_kpis(session_id, final_kpis, engine)
 
     logger.info("Calculated %d KPI(s) for session '%s'.", len(final_kpis), session_id)
     return final_kpis
+
+
+def simulate_kpi_scenario(
+    kpis: list[KPIResult],
+    adjustments: dict[str, float | int | str],
+) -> dict[str, object]:
+    """Project KPI values under a simple percentage-change scenario."""
+    if not kpis:
+        return {
+            "scenario": {},
+            "delta_pct": {},
+            "summary": "No KPI data is available for a scenario simulation.",
+        }
+
+    scenario: dict[str, dict[str, float]] = {}
+    delta_pct: dict[str, float] = {}
+    impacts: list[tuple[str, float]] = []
+
+    for kpi in kpis:
+        raw_change = _lookup_adjustment(kpi.kpi_name, adjustments)
+        if raw_change is None:
+            raw_change = 0.0
+        pct_change = _normalize_percentage(raw_change)
+        projected = float(kpi.kpi_value) * (1 + pct_change)
+        scenario[kpi.kpi_name] = {
+            "base_value": float(kpi.kpi_value),
+            "adjustment_pct": pct_change * 100.0,
+            "projected_value": round(projected, 2),
+            "confidence": float(kpi.confidence),
+        }
+        delta_pct[kpi.kpi_name] = round(pct_change * 100.0, 2)
+        impacts.append((kpi.kpi_name, pct_change * 100.0))
+
+    primary_name, primary_change = max(impacts, key=lambda item: abs(item[1]), default=("", 0.0))
+    if primary_name and abs(primary_change) > 0:
+        direction = "increase" if primary_change > 0 else "decrease"
+        summary_name = "Revenue" if primary_name == "Total Revenue" else primary_name
+        summary = (
+            f"{summary_name} would {direction} by {abs(primary_change):.1f}% under the current scenario."
+        )
+    else:
+        summary = "No material KPI change is expected under the current scenario."
+
+    return {
+        "scenario": scenario,
+        "delta_pct": delta_pct,
+        "summary": summary,
+    }
+
+
+def _confidence_for_kpi(kpi: KPIResult) -> float:
+    base = 0.68
+    name = kpi.kpi_name.lower()
+    if any(token in name for token in ("revenue", "orders", "customers")):
+        base += 0.12
+    if "rate" in name or "percent" in kpi.kpi_unit:
+        base += 0.05
+    if "avg" in name:
+        base += 0.04
+    if kpi.kpi_value == 0:
+        base -= 0.15
+    if kpi.kpi_value < 0:
+        base -= 0.05
+    return round(max(0.5, min(0.99, base)), 2)
+
+
+def _lookup_adjustment(kpi_name: str, adjustments: dict[str, float | int | str]) -> float | None:
+    keys = [kpi_name, kpi_name.lower(), kpi_name.replace(" ", "_").lower()]
+    for key in keys:
+        if key in adjustments:
+            return float(adjustments[key])
+    aliases = {
+        "total revenue": "revenue",
+        "revenue": "revenue",
+        "total orders": "orders",
+        "orders": "orders",
+        "total customers": "customers",
+        "customers": "customers",
+    }
+    normalized = aliases.get(kpi_name.lower())
+    if normalized:
+        for key in (normalized, normalized.lower(), normalized.replace(" ", "_")):
+            if key in adjustments:
+                return float(adjustments[key])
+    return None
+
+
+def _normalize_percentage(value: float | int | str) -> float:
+    number = float(value)
+    if abs(number) > 1:
+        return number / 100.0
+    return number
 
 
 def _save_kpis(session_id: str, kpis: list[KPIResult], engine: Engine) -> None:

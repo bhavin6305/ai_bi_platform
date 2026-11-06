@@ -119,6 +119,40 @@ def _get_session_user(token: str) -> dict | None:
     return dict(user) if user else None
 
 
+def resolve_request_user(authorization: str | None) -> dict | None:
+    """Return the bearer-token user when present; enforce it in hosted environments."""
+    if authorization:
+        user = _get_session_user(_token_from_header(authorization))
+        if not user:
+            raise HTTPException(status_code=401, detail="Invalid or expired session.")
+        return user
+    if auth_enabled():
+        raise HTTPException(status_code=401, detail="Authentication required.")
+    return None
+
+
+def ensure_session_access(session_id: str, authorization: str | None, engine=None) -> dict | None:
+    """Prevent one signed-in account from reading or changing another account's session."""
+    user = resolve_request_user(authorization)
+    if user is None:
+        return None
+    if engine is None:
+        from api.database import get_engine
+        engine = get_engine()
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS owner_user_id INTEGER"
+        ))
+    with engine.connect() as conn:
+        owner_id = conn.execute(
+            text("SELECT owner_user_id FROM upload_sessions WHERE session_id = :sid"),
+            {"sid": session_id},
+        ).scalar()
+    if owner_id != user["user_id"]:
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return user
+
+
 def _hash_password(password: str, salt: bytes) -> str:
     return hashlib.pbkdf2_hmac(
         "sha256", password.encode("utf-8"), salt, PASSWORD_ITERATIONS

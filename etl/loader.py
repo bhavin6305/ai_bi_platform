@@ -193,6 +193,7 @@ def _load_dataframe(
 def _upsert_upload_session(
     session_id   : str,
     status       : str,
+    owner_user_id: int = None,
     total_files  : int = 0,
     total_rows   : int = 0,
     completed_at : datetime = None,
@@ -206,17 +207,28 @@ def _upsert_upload_session(
     call this multiple times (at start with 'loading', at end with 'done')
     without duplicate key errors.
     """
+    with engine.begin() as conn:
+        conn.execute(text(
+            "ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS owner_user_id INTEGER"
+        ))
     sql = text("""
         INSERT INTO upload_sessions
-            (session_id, status, total_files, total_rows, error_message, completed_at)
+            (session_id, status, total_files, total_rows, error_message, completed_at, owner_user_id)
         VALUES
-            (:session_id, :status, :total_files, :total_rows, :error_message, :completed_at)
+            (:session_id, :status, :total_files, :total_rows, :error_message, :completed_at, :owner_user_id)
         ON CONFLICT (session_id) DO UPDATE SET
             status        = EXCLUDED.status,
-            total_files   = EXCLUDED.total_files,
-            total_rows    = EXCLUDED.total_rows,
+            total_files   = CASE
+                WHEN EXCLUDED.total_files > 0 THEN EXCLUDED.total_files
+                ELSE upload_sessions.total_files
+            END,
+            total_rows    = CASE
+                WHEN EXCLUDED.total_rows > 0 THEN EXCLUDED.total_rows
+                ELSE upload_sessions.total_rows
+            END,
             error_message = EXCLUDED.error_message,
-            completed_at  = EXCLUDED.completed_at;
+            completed_at  = EXCLUDED.completed_at,
+            owner_user_id = COALESCE(EXCLUDED.owner_user_id, upload_sessions.owner_user_id);
     """)
 
     with engine.connect() as conn:
@@ -227,6 +239,7 @@ def _upsert_upload_session(
             "total_rows"   : total_rows,
             "error_message": error_message,
             "completed_at" : completed_at,
+            "owner_user_id": owner_user_id,
         })
         conn.commit()
 

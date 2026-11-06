@@ -94,6 +94,58 @@ export interface KpiComparisonResponse {
   comparisons: Record<string, KpiComparison>;
 }
 
+export interface BusinessAlert {
+  event_type: string;
+  severity: "low" | "medium" | "high";
+  kpi_name: string;
+  title: string;
+  message: string;
+  current_value: number;
+  previous_value: number;
+  percent_change: number;
+  absolute_change: number;
+  recommendation: string;
+  related_movements: Array<{
+    kpi_name: string;
+    direction: "up" | "down" | "flat";
+    percent_change: number | null;
+    absolute_change: number;
+    unit: string;
+  }>;
+  period_from: string;
+  period_to: string;
+}
+
+export interface BusinessAlertHistoryItem {
+  id: number;
+  event_type: string;
+  severity: "low" | "medium" | "high";
+  title: string;
+  message: string;
+  created_at: string | null;
+}
+
+export interface BusinessAlertsResponse {
+  session_id: string;
+  comparison_available: boolean;
+  period: { date_from: string | null; date_to: string | null };
+  alerts: BusinessAlert[];
+  history: BusinessAlertHistoryItem[];
+}
+
+export interface WhatIfResponse {
+  session_id: string;
+  scenario_name: string;
+  scenario: Record<string, {
+    base_value: number;
+    adjustment_pct: number;
+    projected_value: number;
+    confidence: number;
+  }>;
+  delta_pct: Record<string, number>;
+  summary: string;
+}
+
 export interface ChartMeta {
   chart_id: string;
   chart_type: string;
@@ -293,6 +345,26 @@ export const AibiApi = {
     );
     return data;
   },
+  evaluateBusinessAlerts: async (sessionId: string, filters: DashboardFilters = {}) => {
+    const { data } = await api.post<BusinessAlertsResponse>(
+      `/api/analytics/${sessionId}/alerts/evaluate`,
+      undefined,
+      { params: filters },
+    );
+    return data;
+  },
+  whatIf: async (
+    sessionId: string,
+    adjustments: Record<string, number>,
+    filters: DashboardFilters = {},
+  ) => {
+    const { data } = await api.post<WhatIfResponse>(
+      `/api/analytics/${sessionId}/what-if`,
+      { adjustments },
+      { params: filters },
+    );
+    return data;
+  },
   chart: async (sessionId: string, chartId: string, filters: DashboardFilters = {}) => {
     const { data } = await api.get<ChartData>(`/api/analytics/${sessionId}/chart/${chartId}`, {
       params: filters,
@@ -426,7 +498,10 @@ export const setSessionId = (id: string) => {
 };
 
 export const setAuthToken = (token: string) => {
-  if (typeof window !== "undefined") window.localStorage.setItem("aibi_auth_token", token);
+  if (typeof window !== "undefined") {
+    window.localStorage.setItem("aibi_auth_token", token);
+    window.localStorage.removeItem("session_id");
+  }
 };
 
 export const clearAuth = () => {

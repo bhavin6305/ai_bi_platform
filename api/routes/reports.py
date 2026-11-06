@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 
 from analytics.filters import DashboardFilters
 from api.database import get_engine
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import ensure_session_access
 from api.routes.analytics import _validated_filters
 from reports.pdf_report import build_pdf_report
 
@@ -25,10 +25,8 @@ def download_report(
     category_value: str | None = Query(default=None),
 ):
     """Generate an in-memory PDF matching the current dashboard filters."""
-    if auth_enabled():
-        require_auth(authorization)
-
     engine = get_engine()
+    ensure_session_access(session_id, authorization, engine)
     filters = _validated_filters(
         session_id, engine, date_column, date_from, date_to, category_column, category_value
     )

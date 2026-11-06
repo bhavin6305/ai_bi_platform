@@ -17,6 +17,7 @@ DROP TABLE IF EXISTS upload_sessions      CASCADE;
 -- 1. Upload Sessions
 CREATE TABLE upload_sessions (
     session_id        VARCHAR(36)  PRIMARY KEY,
+    owner_user_id     INTEGER,
     created_at        TIMESTAMP    DEFAULT NOW(),
     status            VARCHAR(20)  DEFAULT 'pending',
     total_files       INTEGER      DEFAULT 0,

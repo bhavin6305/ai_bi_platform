@@ -6,7 +6,7 @@ from fastapi import APIRouter, Header, HTTPException, Query
 from sqlalchemy import text
 
 from api.database import get_engine
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import ensure_session_access
 from analytics.filters import DashboardFilters, validate_filter_identifiers
 from analytics.kpi_comparison import compare_kpis
 
@@ -30,10 +30,8 @@ def get_kpi_comparison(
     forward unchanged. If no valid comparison exists, the response is empty
     rather than fabricating a percentage.
     """
-    if auth_enabled():
-        require_auth(authorization)
-
     engine = get_engine()
+    ensure_session_access(session_id, authorization, engine)
 
     with engine.connect() as conn:
         session = conn.execute(

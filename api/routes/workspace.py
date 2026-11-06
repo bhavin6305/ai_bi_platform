@@ -14,7 +14,7 @@ from sqlalchemy import text
 
 from ai.insight_generator import _get_client
 from api.database import get_engine
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import ensure_session_access
 from reports.pdf_report import build_pdf_report
 from analytics.chart_generator import generate_chart_data
 
@@ -112,16 +112,14 @@ def generate_executive_summary(session_id: str) -> str:
 
 @router.get("/analytics/{session_id}/executive-summary")
 def executive_summary(session_id: str, authorization: str | None = Header(default=None)):
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
     _require_session(session_id)
     return {"session_id": session_id, "summary": generate_executive_summary(session_id)}
 
 
 @router.post("/analytics/{session_id}/share")
 def create_share_link(session_id: str, authorization: str | None = Header(default=None)):
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
     _require_session(session_id)
     ensure_workspace_tables()
     raw_token = secrets.token_urlsafe(32)
@@ -195,8 +193,7 @@ def get_shared_dashboard(token: str):
 
 @router.post("/report-schedules")
 def create_report_schedule(payload: ScheduleRequest, authorization: str | None = Header(default=None)):
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(payload.session_id, authorization)
     _require_session(payload.session_id)
     ensure_workspace_tables()
     next_run = datetime.now(timezone.utc).replace(tzinfo=None) + _frequency_delta(payload.frequency)

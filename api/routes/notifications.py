@@ -6,7 +6,10 @@ from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import text
 
 from api.database import get_engine
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import ensure_session_access
+from analytics.anomaly_detector import default_monitoring_period, detect_kpi_anomalies
+from analytics.filters import DashboardFilters
+from analytics.kpi_comparison import compare_kpis
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -85,10 +88,91 @@ def create_notification(session_id: str, event_type: str, title: str, message: s
         logger.warning("Could not save notification for session '%s': %s", session_id, error)
 
 
+def create_notification_once(
+    session_id: str,
+    event_type: str,
+    title: str,
+    message: str,
+) -> None:
+    """Persist an identical alert only once for a session."""
+    try:
+        ensure_notifications_table()
+        with get_engine().begin() as conn:
+            conn.execute(
+                text("""
+                    INSERT INTO notifications (session_id, event_type, title, message)
+                    SELECT :session_id, :event_type, :title, :message
+                    WHERE NOT EXISTS (
+                        SELECT 1 FROM notifications
+                        WHERE session_id = :session_id
+                          AND event_type = :event_type
+                          AND title = :title
+                          AND message = :message
+                    )
+                """),
+                {
+                    "session_id": session_id,
+                    "event_type": event_type,
+                    "title": title,
+                    "message": message,
+                },
+            )
+    except Exception as error:
+        logger.warning("Could not save business alert for session '%s': %s", session_id, error)
+
+
+def create_business_anomaly_notifications(session_id: str) -> None:
+    """Evaluate the latest comparable periods after an upload without failing ETL."""
+    try:
+        engine = get_engine()
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text("""
+                    SELECT table_name, column_name, detected_type, unique_count
+                    FROM schema_profiles
+                    WHERE session_id = :session_id
+                    ORDER BY table_name, column_order
+                """),
+                {"session_id": session_id},
+            ).fetchall()
+        profiles: dict[str, list[dict]] = {}
+        for table, column, detected_type, unique_count in rows:
+            profiles.setdefault(table, []).append({
+                "column_name": column,
+                "detected_type": detected_type,
+                "unique_count": unique_count,
+            })
+
+        period = default_monitoring_period(profiles, engine)
+        if not period:
+            return
+
+        date_column, date_from, date_to = period
+        filters = DashboardFilters(
+            date_column=date_column,
+            date_from=date_from,
+            date_to=date_to,
+        )
+        comparisons = compare_kpis(session_id, profiles, engine, filters)
+        alerts = detect_kpi_anomalies(comparisons, str(date_from), str(date_to))
+        for alert in alerts:
+            create_notification_once(
+                session_id,
+                str(alert["event_type"]),
+                str(alert["title"]),
+                str(alert["message"]),
+            )
+    except Exception as error:
+        logger.warning(
+            "Could not evaluate business alerts for session '%s': %s",
+            session_id,
+            error,
+        )
+
+
 @router.get("/notifications/{session_id}")
 def list_notifications(session_id: str, authorization: str | None = Header(default=None)):
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
 
     try:
         ensure_notifications_table()
@@ -124,8 +208,7 @@ def list_notifications(session_id: str, authorization: str | None = Header(defau
 
 @router.post("/notifications/{session_id}/read")
 def mark_notifications_read(session_id: str, authorization: str | None = Header(default=None)):
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
 
     ensure_notifications_table()
     with get_engine().begin() as conn:

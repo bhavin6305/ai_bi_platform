@@ -1,7 +1,7 @@
 """
 sql_generator.py
 ----------------
-Converts natural language questions to SQL using Groq + Llama 3.1.
+ Converts natural language questions to SQL using Groq-hosted GPT OSS.
 
 Called by: POST /api/chat
 """
@@ -134,20 +134,35 @@ Corrected SQL:"""
                         },
                         {"role": "user", "content": prompt}
                     ],
-                    max_tokens = 300,
+                    max_tokens = 1024,
                     temperature= 0.0,
                 )
                 return response
 
             response = retry_with_backoff(call_model, max_attempts=2, retry_exceptions=(TimeoutError, ConnectionError, OSError))
-            raw_sql = response.choices[0].message.content.strip()
+            choice = response.choices[0]
+            message = choice.message
+            raw_sql = (message.content or "").strip()
+
+            if not raw_sql:
+                finish_reason = getattr(choice, "finish_reason", None) or "unknown"
+                last_error = f"The AI provider returned an empty SQL response (finish reason: {finish_reason})."
+                last_sql = "(empty response)"
+                logger.warning("SQL generation attempt %d returned empty content; retrying.", attempt + 1)
+                continue
 
             # Clean markdown
             raw_sql = re.sub(r"```sql\s*", "", raw_sql, flags=re.IGNORECASE)
             raw_sql = re.sub(r"```\s*",    "", raw_sql)
             raw_sql = raw_sql.strip()
 
-            raw_sql = validate_select_sql(raw_sql)
+            try:
+                raw_sql = validate_select_sql(raw_sql)
+            except ValueError as e:
+                last_error = str(e)
+                last_sql = raw_sql or "(empty response)"
+                logger.warning("SQL generation attempt %d returned invalid SQL: %s", attempt + 1, last_error)
+                continue
 
             # Try executing — if it fails, retry with the error
             test_result = _try_execute(raw_sql, engine)
@@ -171,6 +186,11 @@ Corrected SQL:"""
             logger.error("LLM call failed on attempt %d: %s", attempt + 1, e)
             break
 
+    if last_error and "empty SQL response" in last_error:
+        raise ValueError(
+            "The AI provider returned no SQL after multiple attempts. "
+            "Please retry your question; if the problem continues, check the AI provider/model configuration."
+        )
     raise ValueError(f"Could not generate valid SQL after {max_retries + 1} attempts. Last error: {last_error}")
 
 

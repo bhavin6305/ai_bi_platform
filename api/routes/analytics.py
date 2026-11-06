@@ -13,10 +13,13 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from api.database import get_engine
-from api.routes.auth import auth_enabled, require_auth
+from api.routes.auth import ensure_session_access, resolve_request_user
+from api.routes.notifications import create_notification_once, ensure_notifications_table
+from analytics.anomaly_detector import default_monitoring_period, detect_kpi_anomalies
 from analytics.chart_generator import generate_chart_data
 from analytics.filters import DashboardFilters, validate_filter_identifiers
-from analytics.kpi_engine import calculate_kpis
+from analytics.kpi_comparison import compare_kpis
+from analytics.kpi_engine import calculate_kpis, simulate_kpi_scenario
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -26,11 +29,14 @@ class SessionRename(BaseModel):
     name: str = Field(min_length=1, max_length=120)
 
 
+class WhatIfScenarioRequest(BaseModel):
+    adjustments: dict[str, float | int | str] = Field(default_factory=dict)
+
+
 def _ensure_session_name_column(engine) -> None:
     with engine.begin() as conn:
-        conn.execute(text(
-            "ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS session_name VARCHAR(120)"
-        ))
+        conn.execute(text("ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS session_name VARCHAR(120)"))
+        conn.execute(text("ALTER TABLE upload_sessions ADD COLUMN IF NOT EXISTS owner_user_id INTEGER"))
 
 
 @router.get("/analytics/{session_id}")
@@ -50,10 +56,8 @@ def get_analytics(
 
     Streamlit dashboard page reads this to render the auto-generated charts.
     """
-    if auth_enabled():
-        require_auth(authorization)
-
     engine = get_engine()
+    ensure_session_access(session_id, authorization, engine)
 
     filters = _validated_filters(
         session_id, engine, date_column, date_from, date_to, category_column, category_value
@@ -73,18 +77,22 @@ def get_analytics(
             profiles = _schema_profiles(session_id, engine)
             kpis = calculate_kpis(session_id, profiles, engine, filters=filters, persist=False)
             kpi_rows = [
-                (k.kpi_name, k.kpi_value, k.kpi_unit, k.kpi_category)
+                (k.kpi_name, k.kpi_value, k.kpi_unit, k.kpi_category, k.confidence)
                 for k in kpis
             ]
         else:
             kpi_rows = conn.execute(
                 text("""
-                SELECT kpi_name, kpi_value, kpi_unit, kpi_category
+                SELECT kpi_name, kpi_value, kpi_unit, kpi_category, display_format
                 FROM kpi_results WHERE session_id = :sid
                 ORDER BY kpi_category, kpi_name
                 """),
                 {"sid": session_id}
             ).fetchall()
+            kpi_rows = [
+                (r[0], r[1], r[2], r[3], 0.75)
+                for r in kpi_rows
+            ]
 
         # Chart configs
         charts = conn.execute(
@@ -101,7 +109,7 @@ def get_analytics(
     return {
         "session_id": session_id,
         "kpis": [
-            {"name": r[0], "value": r[1], "unit": r[2], "category": r[3]}
+            {"name": r[0], "value": r[1], "unit": r[2], "category": r[3], "confidence": r[4]}
             for r in kpi_rows
         ],
         "charts": [
@@ -122,31 +130,167 @@ def get_analytics(
     }
 
 
+@router.post("/analytics/{session_id}/what-if")
+def simulate_what_if(
+    session_id: str,
+    payload: WhatIfScenarioRequest,
+    authorization: str | None = Header(default=None),
+    date_column: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    category_column: str | None = Query(default=None),
+    category_value: str | None = Query(default=None),
+):
+    """Project KPI outcomes under a simple business scenario change."""
+    engine = get_engine()
+    ensure_session_access(session_id, authorization, engine)
+
+    profiles = _schema_profiles(session_id, engine)
+    if not profiles:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+    filters = _validated_filters(
+        session_id, engine, date_column, date_from, date_to, category_column, category_value
+    )
+    kpis = calculate_kpis(
+        session_id, profiles, engine, filters=filters if filters.active else None, persist=False
+    )
+    result = simulate_kpi_scenario(kpis, payload.adjustments)
+    return {
+        "session_id": session_id,
+        "scenario_name": "business_what_if",
+        **result,
+    }
+
+
+@router.post("/analytics/{session_id}/alerts/evaluate")
+def evaluate_business_alerts(
+    session_id: str,
+    authorization: str | None = Header(default=None),
+    date_column: str | None = Query(default=None),
+    date_from: date | None = Query(default=None),
+    date_to: date | None = Query(default=None),
+    category_column: str | None = Query(default=None),
+    category_value: str | None = Query(default=None),
+):
+    """Compare equivalent periods, save material KPI movements, and return alert history."""
+    engine = get_engine()
+    ensure_session_access(session_id, authorization, engine)
+    profiles = _schema_profiles(session_id, engine)
+    if not profiles:
+        raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found.")
+
+    if date_column:
+        try:
+            validate_filter_identifiers(DashboardFilters(date_column=date_column), engine)
+        except ValueError as error:
+            raise HTTPException(status_code=400, detail=str(error))
+        if not any(
+            column["column_name"] == date_column and column["detected_type"] == "datetime"
+            for columns in profiles.values()
+            for column in columns
+        ):
+            raise HTTPException(status_code=400, detail="date_column must be a detected datetime field.")
+
+    if not date_from and not date_to:
+        default_period = default_monitoring_period(profiles, engine, date_column)
+        if default_period:
+            date_column, date_from, date_to = default_period
+
+    filters = _validated_filters(
+        session_id, engine, date_column, date_from, date_to, category_column, category_value
+    )
+    comparisons = compare_kpis(session_id, profiles, engine, filters) if (
+        filters.date_column and filters.date_from and filters.date_to
+    ) else {}
+    alerts = detect_kpi_anomalies(
+        comparisons,
+        str(filters.date_from) if filters.date_from else "",
+        str(filters.date_to) if filters.date_to else "",
+    )
+    for alert in alerts:
+        create_notification_once(
+            session_id,
+            str(alert["event_type"]),
+            str(alert["title"]),
+            str(alert["message"]),
+        )
+
+    try:
+        ensure_notifications_table()
+        with engine.connect() as conn:
+            history = conn.execute(
+                text("""
+                    SELECT notification_id, event_type, title, message, created_at
+                    FROM notifications
+                    WHERE session_id = :session_id
+                    ORDER BY created_at DESC, notification_id DESC
+                    LIMIT 10
+                """),
+                {"session_id": session_id},
+            ).fetchall()
+    except Exception as error:
+        logger.error("Could not load business alert history: %s", error)
+        raise HTTPException(status_code=503, detail="Business alert history is unavailable.")
+
+    return {
+        "session_id": session_id,
+        "comparison_available": bool(comparisons),
+        "period": {
+            "date_from": str(filters.date_from) if filters.date_from else None,
+            "date_to": str(filters.date_to) if filters.date_to else None,
+        },
+        "alerts": alerts,
+        "history": [
+            {
+                "id": row[0],
+                "event_type": row[1],
+                "severity": _alert_severity(row[1]),
+                "title": row[2],
+                "message": row[3],
+                "created_at": str(row[4]) if row[4] else None,
+            }
+            for row in history
+        ],
+    }
+
+
+def _alert_severity(event_type: str) -> str:
+    if event_type.endswith("_high"):
+        return "high"
+    if event_type.endswith("_medium") or event_type == "anomaly_detected":
+        return "medium"
+    return "low"
+
+
 @router.get("/sessions")
 def list_sessions(authorization: str | None = Header(default=None)):
     """
     List all upload sessions with their status.
     Used by Streamlit to let users pick a previous session.
     """
-    if auth_enabled():
-        require_auth(authorization)
-
+    user = resolve_request_user(authorization)
     engine = get_engine()
     _ensure_session_name_column(engine)
 
     with engine.connect() as conn:
         rows = conn.execute(
             text("""
-                  SELECT s.session_id, s.session_name, s.status, s.total_files,
-                       s.total_rows, s.created_at,
-                       COUNT(DISTINCT f.file_id) as file_count
+                SELECT s.session_id, s.session_name, s.status, s.total_files,
+                       GREATEST(COALESCE(s.total_rows, 0), COALESCE(f.total_rows, 0)) AS total_rows,
+                       s.created_at, COALESCE(f.file_count, 0) AS file_count
                 FROM upload_sessions s
-                LEFT JOIN uploaded_files f ON s.session_id = f.session_id
-                GROUP BY s.session_id, s.session_name, s.status, s.total_files,
-                         s.total_rows, s.created_at
+                LEFT JOIN (
+                    SELECT session_id, COUNT(*) AS file_count,
+                           COALESCE(SUM(row_count), 0) AS total_rows
+                    FROM uploaded_files
+                    GROUP BY session_id
+                ) f ON f.session_id = s.session_id
+                WHERE (:owner_id IS NULL OR s.owner_user_id = :owner_id)
                 ORDER BY s.created_at DESC
                 LIMIT 50
             """)
+            , {"owner_id": user["user_id"] if user else None}
         ).fetchall()
 
     return {
@@ -156,9 +300,9 @@ def list_sessions(authorization: str | None = Header(default=None)):
                 "name"       : r[1] or f"Dataset {r[0][:8]}",
                 "status"     : r[2],
                 "total_files": r[3],
-                "total_rows" : r[4],
-                "created_at" : str(r[5]) if r[5] else None,
-                "file_count" : r[6],
+                "total_rows": r[4],
+                "created_at": str(r[5]) if r[5] else None,
+                "file_count": r[6],
             }
             for r in rows
         ]
@@ -171,8 +315,7 @@ def rename_session(
     payload: SessionRename,
     authorization: str | None = Header(default=None),
 ):
-    if auth_enabled():
-        require_auth(authorization)
+    user = ensure_session_access(session_id, authorization)
     name = payload.name.strip()
     if not name:
         raise HTTPException(status_code=400, detail="Session name cannot be empty.")
@@ -180,8 +323,13 @@ def rename_session(
     _ensure_session_name_column(engine)
     with engine.begin() as conn:
         updated = conn.execute(
-            text("UPDATE upload_sessions SET session_name = :name WHERE session_id = :session_id RETURNING session_id"),
-            {"name": name, "session_id": session_id},
+                        text("""
+                                UPDATE upload_sessions SET session_name = :name
+                                WHERE session_id = :session_id
+                                    AND (:owner_id IS NULL OR owner_user_id = :owner_id)
+                                RETURNING session_id
+                        """),
+                        {"name": name, "session_id": session_id, "owner_id": user["user_id"] if user else None},
         ).first()
     if not updated:
         raise HTTPException(status_code=404, detail="Session not found.")
@@ -210,10 +358,8 @@ def get_chart_data(
             fig = px.line(x=data['x'], y=data['y'], title=data['title'])
             st.plotly_chart(fig)
     """
-    if auth_enabled():
-        require_auth(authorization)
-
     engine = get_engine()
+    ensure_session_access(session_id, authorization, engine)
     filters = _validated_filters(
         session_id, engine, date_column, date_from, date_to, category_column, category_value
     )
@@ -226,8 +372,7 @@ def get_chart_data(
 @router.get("/analytics/{session_id}/filters")
 def get_filter_metadata(session_id: str, authorization: str | None = Header(default=None)):
     """Return validated date and category fields available for dashboard filters."""
-    if auth_enabled():
-        require_auth(authorization)
+    ensure_session_access(session_id, authorization)
 
     engine = get_engine()
     profiles = _schema_profiles(session_id, engine)
